@@ -1,77 +1,30 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:github.com)",
+      "WebFetch",
       "WebSearch",
-      "Bash(mkdir:*)",
-      "Bash(cd:*)",
-      "Bash(git commit:*)",
-      "Bash(export:*)",
-      "Bash(cargo check:*)",
-      "Bash(node -e \":*)",
-      "Bash(dlltool --version)",
-      "Bash(cargo clean:*)",
-      "Bash(cargo build:*)",
-      "Bash(npm run:*)",
-      "Bash(cargo search:*)",
-      "Bash(cargo info:*)",
-      "Bash(cargo doc:*)",
-      "Bash(gcc --version)",
-      "Bash(ls C:/msys64/mingw64/bin/*.exe)",
-      "Bash(/e/workspace/openNetDrive/openNetDrive/.env:*)",
-      "Bash(npm install:*)",
-      "Bash(netstat -ano)",
-      "Bash(findstr :5173)",
-      "Bash(ls -la /e/workspace/openNetDrive/openNetDrive/target/debug/*.exe)",
-      "Bash(tasklist)",
-      "Bash(cargo run:*)",
-      "Bash(findstr \"node\")",
-      "Bash(where windres:*)",
-      "Bash(where rustc:*)",
-      "Bash(rustc --version)",
-      "Bash(cargo --version)",
-      "Bash(rustup target:*)",
-      "Bash(RUSTFLAGS=\"-C target-feature=+crt-static\" cargo build)",
-      "Bash(gcc -E /dev/null)",
-      "Bash(gcc -x c -E -)",
-      "Bash($env:CC = \"gcc\")",
-      "Bash($env:CFLAGS = \"\")",
-      "Bash(target/debug/ond.exe config:*)",
-      "Bash(cargo update:*)",
-      "Bash(gcc:*)",
-      "Bash(echo \"FAILED: $?\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syu --noconfirm 2>&1 | tail -50\")",
-      "Bash(C:/msys64/usr/bin/pacman-key --init)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-toolchain 2>&1 | tail -30\")",
-      "Bash(curl -L -o /c/tmp/msys2.exe https://github.com/msys2/msys2-installer/releases/download/2025-01-05/msys2-x86_64-20250105.exe)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman-key --populate msys2 2>&1 && pacman -Syu --noconfirm 2>&1 | tail -50\")",
-      "Bash(/c/msys64/etc/pacman.d/mirrorlist.mingw64:*)",
-      "Bash(/c/msys64/etc/pacman.d/mirrorlist.msys:*)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syyu --noconfirm 2>&1 | tail -50\")",
-      "Bash(/c/msys64/etc/pacman.d/mirrorlist.mingw32:*)",
-      "Bash(/c/msys64/etc/pacman.d/mirrorlist.ucrt64:*)",
-      "Bash(/c/msys64/etc/pacman.d/mirrorlist.clang64:*)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syyu --noconfirm 2>&1 | tail -80\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Sy --noconfirm 2>&1 | tail -30\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syy --noconfirm mingw-w64-x86_64-gcc 2>&1 | tail -50\")",
-      "Bash(rm -rf /c/msys64/etc/pacman.d/gnupg)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman-key --init && pacman-key --populate && pacman -Syy --noconfirm 2>&1\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syy --noconfirm && pacman -S --noconfirm mingw-w64-x86_64-gcc 2>&1 | tail -30\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -Syy 2>&1 && echo 'SUCCESS' || echo 'FAILED'\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-toolchain 2>&1 | tail -50\")",
-      "Bash(C:/msys64/mingw64/bin/gcc.exe -o /c/tmp/test.exe /c/tmp/test.c)",
-      "Bash(C:/msys64/mingw64/bin/gcc.exe -v -o /c/tmp/test.exe /c/tmp/test.c)",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"gcc -o /c/tmp/test.exe /c/tmp/test.c && echo 'SUCCESS' || echo 'FAILED: '\\\\$?\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"cargo clean && cargo build 2>&1 | tail -80\")",
-      "Bash(C:/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c \"cargo clean && cargo build 2>&1 | tail -100\")",
-      "Bash(mv openNetDrive/* .)",
-      "Bash(mv openNetDrive/.* .)",
-      "Bash(rmdir openNetDrive)",
-      "Bash(cp openNetDrive/.cursorrules .)",
-      "Bash(cp openNetDrive/.env .)",
-      "Bash(cp openNetDrive/.gitignore .)",
-      "Bash(cp -r openNetDrive/packages .)",
-      "Bash(rm -rf openNetDrive)"
+      "Bash"
+    ],
+    "deny": [
+      "Bash(rm -rf .git)",
+      "Bash(rm -rf .git/)",
+      "Bash(rmdir .git)",
+      "Bash(rmdir .git/)",
+      "Bash(rm -r .git)",
+      "Bash(rm -rv .git)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command=$(jq -r '.tool_input.command' <<< '$ARGUMENTS'); if echo \"$command\" | grep -Eq 'rm.*(-[rfv]*\\s*)*\\.git|rmdir\\s+\\.git|rmdir\\s+\\.git/|rm\\s+-rf\\s+\\.git'; then echo '{\"continue\": false, \"stopReason\": \"禁止删除 .git 目录！这会丢失所有 git 历史记录。\"}'; exit 1; fi; echo '{\"continue\": true}'"
+          }
+        ]
+      }
     ]
   }
 }
