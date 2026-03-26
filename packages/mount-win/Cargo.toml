@@ -19,7 +19,11 @@ tracing = "0.1"
 anyhow = "1"
 thiserror = "1"
 
-# WinFsp - 需要 WinFsp 开发库
-# 注：完整 WinFsp 集成需要额外工具链支持，当前使用基础实现
-# winfsp = "0.12"
-winfsp_build = "0.1"
+# WinFsp FFI
+[dependencies.winfsp-sys]
+version = "0.3"
+optional = true
+
+[features]
+default = []
+winfsp = ["winfsp-sys"]

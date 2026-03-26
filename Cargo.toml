@@ -3,8 +3,6 @@ resolver = "2"
 members = [
     "packages/core",
     "packages/mount-win",
-    "packages/mount-macos",
-    "packages/mount-linux",
     "packages/cli",
 ]
 # Note: tauri-app is not a standard Rust package, it's managed via npm
@@ -45,13 +43,7 @@ http = "1"
 # 凭据存储
 keyring = "2"
 
-# 文件系统
-fuser = "0.14"
-
 # 工具
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-
-# 平台特定
-winfsp = "0.1"

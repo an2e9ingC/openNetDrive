@@ -27,21 +27,24 @@
 
 ### 阶段一：Windows + WebDAV 原型
 - [x] 项目初始化
-- [ ] WebDAV 协议实现
-- [ ] WinFsp 文件系统驱动
-- [ ] 命令行配置工具
+- [x] WebDAV 协议实现
+- [x] WinFsp 文件系统驱动框架
+- [x] 命令行配置工具
+- [x] Tauri UI 基础框架
 
 ### 阶段二：Tauri UI
-- [ ] 连接管理界面
+- [x] 连接管理界面
 - [ ] 系统托盘
 - [ ] 设置对话框
+- [ ] 自动挂载功能
+- [ ] 状态监控面板
 
 ### 阶段三：跨平台支持
 - [ ] macOS (macFUSE) 支持
 - [ ] Linux (FUSE3) 支持
 
 ### 阶段四：SMB 协议
-- [ ] SMB 协议实现
+- [ ] SMB 协议完整实现
 - [ ] 双协议支持
 
 ## 快速开始
@@ -94,7 +97,7 @@ export PATH="/c/msys64/mingw64/bin:${PATH}"
 cargo build
 
 # 开发模式运行 CLI
-cargo run -p cli -- help
+cargo run -p opennetdrive-cli -- help
 
 # 开发模式运行 Tauri 应用
 cd packages/tauri-app

@@ -5,22 +5,27 @@
 
 use opennetdrive_core::protocol::{Protocol, FileEntry};
 use opennetdrive_core::error::{Result, Error};
-use log::{info, error, debug};
+use log::{info, error, debug, warn};
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "winfsp")]
+use winfsp_sys::*;
+
+#[cfg(feature = "winfsp")]
+use std::ffi::CString;
+
+#[cfg(feature = "winfsp")]
+use std::ptr;
+
 /// File handle context
 struct FileHandle {
     path: String,
-    #[allow(dead_code)]
     size: u64,
-    #[allow(dead_code)]
     created: u64,
-    #[allow(dead_code)]
     modified: u64,
-    #[allow(dead_code)]
     accessed: u64,
 }
 
@@ -28,16 +33,6 @@ struct FileHandle {
 struct DirContext {
     entries: Vec<FileEntry>,
     index: usize,
-}
-
-/// WinFsp driver for mounting remote filesystems
-pub struct WinFspDriver {
-    mount_point: String,
-    protocol: Arc<Mutex<Box<dyn Protocol>>>,
-    running: bool,
-    file_handles: Arc<RwLock<HashMap<u64, FileHandle>>>,
-    dir_contexts: Arc<RwLock<HashMap<u64, DirContext>>>,
-    next_handle: Arc<Mutex<u64>>,
 }
 
 /// File information for WinFsp
@@ -65,7 +60,7 @@ impl FileInfo {
         };
 
         Self {
-            file_attributes: if is_dir { 0x10 } else { 0x20 }, // FILE_ATTRIBUTE_DIRECTORY or FILE_ATTRIBUTE_ARCHIVE
+            file_attributes: if is_dir { 0x10 } else { 0x20 },
             file_size: size,
             creation_time: modified_time,
             last_access_time: modified_time,
@@ -75,6 +70,17 @@ impl FileInfo {
     }
 }
 
+/// WinFsp driver for mounting remote filesystems
+pub struct WinFspDriver {
+    mount_point: String,
+    protocol: Arc<Mutex<Box<dyn Protocol>>>,
+    running: bool,
+    file_handles: Arc<RwLock<HashMap<u64, FileHandle>>>,
+    dir_contexts: Arc<RwLock<HashMap<u64, DirContext>>>,
+    next_handle: Arc<Mutex<u64>>,
+}
+
+#[cfg(feature = "winfsp")]
 impl WinFspDriver {
     /// Create a new WinFsp driver instance
     pub fn new(mount_point: String, protocol: Box<dyn Protocol>) -> Self {
@@ -105,9 +111,28 @@ impl WinFspDriver {
             protocol.connect().await?;
         }
 
+        // Initialize WinFsp
+        self.init_winfsp()?;
+
         self.running = true;
         info!("WinFsp filesystem started successfully at {}", self.mount_point);
 
+        Ok(())
+    }
+
+    /// Initialize WinFsp filesystem
+    #[cfg(feature = "winfsp")]
+    fn init_winfsp(&self) -> Result<()> {
+        info!("Initializing WinFsp...");
+
+        // Get the current process instance
+        // Note: In a full implementation, we would register callbacks here
+        // and call FspFileSystemCreate to start the filesystem
+
+        // For now, this is a placeholder - full WinFsp integration requires
+        // implementing all the callback functions and the main loop
+
+        info!("WinFsp initialized (stub implementation)");
         Ok(())
     }
 
@@ -146,7 +171,85 @@ impl WinFspDriver {
     pub fn is_running(&self) -> bool {
         self.running
     }
+}
 
+#[cfg(not(feature = "winfsp"))]
+impl WinFspDriver {
+    /// Create a new WinFsp driver instance (stub without WinFsp)
+    pub fn new(mount_point: String, protocol: Box<dyn Protocol>) -> Self {
+        warn!("WinFsp support not enabled - running in stub mode");
+        Self {
+            mount_point,
+            protocol: Arc::new(Mutex::new(protocol)),
+            running: false,
+            file_handles: Arc::new(RwLock::new(HashMap::new())),
+            dir_contexts: Arc::new(RwLock::new(HashMap::new())),
+            next_handle: Arc::new(Mutex::new(1)),
+        }
+    }
+
+    /// Get next file handle ID
+    async fn next_handle(&self) -> u64 {
+        let mut next = self.next_handle.lock().await;
+        *next += 1;
+        *next
+    }
+
+    /// Start the filesystem (stub without WinFsp)
+    pub async fn start(&mut self) -> Result<()> {
+        info!("Starting WinFsp filesystem (stub mode) at {}", self.mount_point);
+
+        // Connect to the protocol
+        {
+            let mut protocol = self.protocol.lock().await;
+            protocol.connect().await?;
+        }
+
+        self.running = true;
+        info!("WinFsp filesystem started in stub mode at {}", self.mount_point);
+        info!("Note: Full WinFsp support requires building with --features winfsp");
+        Ok(())
+    }
+
+    /// Stop the filesystem and unmount
+    pub async fn stop(&mut self) -> Result<()> {
+        info!("Stopping WinFsp filesystem (stub mode) at {}", self.mount_point);
+
+        self.running = false;
+
+        // Clean up handles
+        {
+            let mut handles = self.file_handles.write().await;
+            handles.clear();
+        }
+        {
+            let mut contexts = self.dir_contexts.write().await;
+            contexts.clear();
+        }
+
+        // Disconnect from the protocol
+        {
+            let mut protocol = self.protocol.lock().await;
+            protocol.disconnect().await?;
+        }
+
+        info!("WinFsp filesystem stopped");
+        Ok(())
+    }
+
+    /// Get the mount point
+    pub fn mount_point(&self) -> &str {
+        &self.mount_point
+    }
+
+    /// Check if the filesystem is running
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+}
+
+/// Common implementations for both WinFsp enabled and disabled builds
+impl WinFspDriver {
     /// Get root directory information
     pub async fn get_root_info(&self) -> Result<FileInfo> {
         Ok(FileInfo::new(true, 0, 0))
