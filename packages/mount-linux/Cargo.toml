@@ -1,0 +1,12 @@
+[package]
+name = "opennetdrive-mount-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linux mount implementation using FUSE3"
+
+[dependencies]
+opennetdrive-core = { path = "../core" }
+tokio = { workspace = true }
+log = { workspace = true }
+fuser = { workspace = true }

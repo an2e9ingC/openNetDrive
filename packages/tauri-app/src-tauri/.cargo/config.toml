@@ -1,0 +1,10 @@
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\msys64\\mingw64\\bin\\gcc.exe"
+ar = "C:\\msys64\\mingw64\\bin\\ar.exe"
+
+[build]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.'cfg(target_os = "windows")']
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
+

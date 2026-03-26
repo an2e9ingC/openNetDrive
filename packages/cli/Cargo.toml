@@ -1,0 +1,38 @@
+[package]
+name = "opennetdrive-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line interface for openNetDrive"
+
+[[bin]]
+name = "ond"
+path = "src/main.rs"
+
+[dependencies]
+opennetdrive-core = { path = "../core" }
+
+# 异步运行时
+tokio = { workspace = true }
+
+# 日志
+log = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# 命令行
+clap = { version = "4", features = ["derive"] }
+
+# 错误处理
+anyhow = { workspace = true }
+
+# 工具
+uuid = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+rpassword = "7"
+
+# 平台特定 (Windows only)
+[target.'cfg(windows)'.dependencies]
+opennetdrive-mount-win = { path = "../mount-win" }

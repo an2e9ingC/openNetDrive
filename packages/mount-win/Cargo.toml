@@ -1,0 +1,25 @@
+[package]
+name = "opennetdrive-mount-win"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "Windows mount implementation using WinFsp"
+
+[dependencies]
+opennetdrive-core = { path = "../core" }
+
+# 异步运行时
+tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
+
+# 日志
+log = "0.4"
+tracing = "0.1"
+
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+
+# WinFsp - 需要 WinFsp 开发库
+# 注：完整 WinFsp 集成需要额外工具链支持，当前使用基础实现
+# winfsp = "0.12"
+winfsp_build = "0.1"

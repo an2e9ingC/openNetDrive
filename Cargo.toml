@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "packages/core",
+    "packages/mount-win",
+    "packages/mount-macos",
+    "packages/mount-linux",
+    "packages/cli",
+]
+# Note: tauri-app is not a standard Rust package, it's managed via npm
+# packages/tauri-app/src-tauri/Cargo.toml is the actual Tauri Rust app
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["openNetDrive Contributors"]
+license = "GPL-3.0"
+repository = "https://github.com/an2e9ingC/openNetDrive"
+homepage = "https://github.com/an2e9ingC/openNetDrive"
+readme = "README.md"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# 日志
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+
+# HTTP/WebDAV
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+http = "1"
+
+# 凭据存储
+keyring = "2"
+
+# 文件系统
+fuser = "0.14"
+
+# 工具
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# 平台特定
+winfsp = "0.1"
