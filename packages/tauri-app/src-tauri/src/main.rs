@@ -251,12 +251,20 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         }
     };
 
-    let mount_point = conn.mount_point.unwrap_or_else(|| {
-        ('Z'..='A').rev()
-            .map(|c| format!("{}:", c))
-            .find(|drive| !std::path::Path::new(&format!("{}\\", drive)).exists())
-            .unwrap_or_else(|| "X:".to_string())
-    });
+    // 如果连接没有指定盘符，或指定的盘符已被占用，自动分配一个可用盘符
+    let mount_point = if let Some(ref mp) = conn.mount_point {
+        // 检查指定盘符是否可用
+        let path = format!("{}\\", mp);
+        if !std::path::Path::new(&path).exists() {
+            mp.clone()
+        } else {
+            // 盘符被占用，从后往前找可用盘符
+            find_available_drive().unwrap_or_else(|| "X:".to_string())
+        }
+    } else {
+        // 未指定盘符，自动分配
+        find_available_drive().unwrap_or_else(|| "X:".to_string())
+    };
 
     let mut driver = WinFspDriver::new(mount_point.clone(), protocol);
 
@@ -454,18 +462,51 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn get_available_drives() -> Result<Vec<String>, String> {
-    // 获取可用盘符 (A-Z)
-    let mut drives = Vec::new();
+fn find_available_drive() -> Option<String> {
+    // 获取已被系统占用的盘符
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for letter in b'A'..=b'Z' {
         let drive = format!("{}:", letter as char);
         let path = format!("{}\\", drive);
         if std::path::Path::new(&path).exists() {
-            drives.push(drive);
+            used.insert(drive);
         }
     }
-    Ok(drives)
+
+    // 从 Z 到 A 找第一个可用的
+    for letter in (b'A'..=b'Z').rev() {
+        let drive = format!("{}:", letter as char);
+        if !used.contains(&drive) {
+            return Some(drive);
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn get_available_drives() -> Result<Vec<String>, String> {
+    // 获取可用盘符 - 返回未被系统占用的盘符
+    let mut available = Vec::new();
+    // 先获取已使用的盘符
+    let mut used_drives: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:", letter as char);
+        let path = format!("{}\\", drive);
+        // 如果盘符存在，说明被占用
+        if std::path::Path::new(&path).exists() {
+            used_drives.insert(drive);
+        }
+    }
+
+    // 从 Z 到 A 遍历，返回未被占用的盘符（优先使用后面的盘符）
+    for letter in (b'A'..=b'Z').rev() {
+        let drive = format!("{}:", letter as char);
+        if !used_drives.contains(&drive) {
+            available.push(drive);
+        }
+    }
+
+    Ok(available)
 }
 
 #[tauri::command]

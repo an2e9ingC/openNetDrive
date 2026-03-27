@@ -66,7 +66,13 @@ function App() {
 
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
+      // 错误信息显示更长
+      const duration = toast.type === 'error' ? 6000 : 3000;
+      const timer = setTimeout(() => setToast(null), duration);
+      // 同时添加日志
+      const now = new Date();
+      const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+      setLogs(prev => [...prev.slice(-99), { time, level: toast.type, message: toast.message }]);
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -100,7 +106,8 @@ function App() {
       loadConnections();
     } catch (error) {
       console.error('Failed to mount:', error);
-      setToast({ message: '挂载失败：' + error, type: 'error' });
+      const errMsg = '挂载失败：' + error;
+      setToast({ message: errMsg, type: 'error' });
     } finally {
       setMountingId(null);
     }
