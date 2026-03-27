@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 interface Connection {
   id: string;
@@ -24,6 +25,12 @@ interface AppSettings {
   log_level: string;
 }
 
+interface LogEntry {
+  time: string;
+  level: string;
+  message: string;
+}
+
 function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -35,10 +42,27 @@ function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [mountingId, setMountingId] = useState<string | null>(null);
   const [mountedCount, setMountedCount] = useState(0);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadConnections();
+    // 监听后端日志事件
+    const unlisten = listen<{ level: string; message: string }>('log-event', (event) => {
+      const now = new Date();
+      const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+      setLogs(prev => [...prev.slice(-99), { time, level: event.payload.level, message: event.payload.message }]);
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
   }, []);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
 
   useEffect(() => {
     if (toast) {
@@ -67,9 +91,9 @@ function App() {
   const handleMount = async (id: string) => {
     setMountingId(id);
     try {
-      const result = await invoke<{ success: boolean; message: string }>('mount_connection', { id });
+      const result = await invoke<{ success: boolean; message: string; mount_point?: string }>('mount_connection', { id });
       if (result.success) {
-        setToast({ message: `挂载成功 - ${result.message}`, type: 'success' });
+        setToast({ message: `挂载成功 - ${result.mount_point}`, type: 'success' });
       } else {
         setToast({ message: result.message, type: 'error' });
       }
@@ -93,6 +117,15 @@ function App() {
     }
   };
 
+  const handleOpenFolder = async (mountPoint: string) => {
+    try {
+      await invoke('open_folder', { path: mountPoint + '\\' });
+    } catch (error) {
+      console.error('Failed to open folder:', error);
+      setToast({ message: '打开文件夹失败', type: 'error' });
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('确定要删除此连接吗？')) return;
 
@@ -109,6 +142,14 @@ function App() {
   const handleEdit = (conn: Connection) => {
     setEditingConnection(conn);
     setShowEditModal(true);
+  };
+
+  const getHostInfo = async (id: string): Promise<string> => {
+    try {
+      return await invoke<string>('get_connection_host_info', { id });
+    } catch {
+      return '';
+    }
   };
 
   return (
@@ -153,51 +194,17 @@ function App() {
         ) : (
           <div className="connections-list">
             {connections.map((conn) => (
-              <div key={conn.id} className="connection-card">
-                <div className="connection-info">
-                  <div className="connection-status">
-                    {conn.enabled ? '🟢' : '⚫'}
-                  </div>
-                  <div className="connection-details">
-                    <h3>{conn.name}</h3>
-                    <p className="connection-meta">
-                      {conn.connection_type === 'webdav' ? 'WebDAV' : 'SMB'} • {conn.mount_point || '未挂载'}
-                      {conn.auto_mount && ' • 自动挂载'}
-                    </p>
-                  </div>
-                </div>
-                <div className="connection-actions">
-                  {conn.enabled ? (
-                    <button
-                      className="btn btn-danger"
-                      onClick={() => handleUnmount(conn.id)}
-                      disabled={mountingId === conn.id}
-                    >
-                      断开
-                    </button>
-                  ) : (
-                    <button
-                      className="btn btn-success"
-                      onClick={() => handleMount(conn.id)}
-                      disabled={mountingId === conn.id}
-                    >
-                      {mountingId === conn.id ? '...' : '连接'}
-                    </button>
-                  )}
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => handleEdit(conn)}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => handleDelete(conn.id)}
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
+              <ConnectionCard
+                key={conn.id}
+                connection={conn}
+                onMount={() => handleMount(conn.id)}
+                onUnmount={() => handleUnmount(conn.id)}
+                onOpenFolder={() => conn.mount_point && handleOpenFolder(conn.mount_point)}
+                onEdit={() => handleEdit(conn)}
+                onDelete={() => handleDelete(conn.id)}
+                mountingId={mountingId}
+                getHostInfo={() => getHostInfo(conn.id)}
+              />
             ))}
           </div>
         )}
@@ -205,8 +212,28 @@ function App() {
 
       <footer className="footer">
         <span onClick={() => setShowSettingsModal(true)}>⚙ 设置</span>
+        <span onClick={() => setShowLogs(!showLogs)}>📋 日志 {showLogs ? '▲' : '▼'}</span>
         <span onClick={() => setShowAboutModal(true)}>ℹ️ 关于</span>
       </footer>
+
+      {showLogs && (
+        <div className="log-panel">
+          <div className="log-header">
+            <span>日志</span>
+            <button className="btn-clear" onClick={() => setLogs([])}>清空</button>
+          </div>
+          <div className="log-content">
+            {logs.map((log, index) => (
+              <div key={index} className={`log-entry log-${log.level}`}>
+                <span className="log-time">{log.time}</span>
+                <span className="log-level">[{log.level.toUpperCase()}]</span>
+                <span className="log-message">{log.message}</span>
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        </div>
+      )}
 
       {showAddModal && (
         <AddModal
@@ -252,6 +279,83 @@ function App() {
   );
 }
 
+interface ConnectionCardProps {
+  connection: Connection;
+  onMount: () => void;
+  onUnmount: () => void;
+  onOpenFolder: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  mountingId: string | null;
+  getHostInfo: () => Promise<string>;
+}
+
+function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, onDelete, mountingId, getHostInfo }: ConnectionCardProps) {
+  const [hostInfo, setHostInfo] = useState<string>('');
+
+  useEffect(() => {
+    getHostInfo().then(setHostInfo);
+  }, [connection.id, getHostInfo]);
+
+  return (
+    <div className="connection-card">
+      <div className="connection-info">
+        <div className="connection-status">
+          {connection.enabled ? '🟢' : '⚫'}
+        </div>
+        <div className="connection-details">
+          <h3>{connection.name}</h3>
+          <p className="connection-meta">
+            <span className="meta-type">{connection.connection_type === 'webdav' ? 'WebDAV' : 'SMB'}</span>
+            {connection.mount_point && (
+              <span className="meta-drive">本地: {connection.mount_point}</span>
+            )}
+            {!connection.mount_point && <span className="meta-unmounted">未挂载</span>}
+            {connection.auto_mount && <span className="meta-auto">自动</span>}
+          </p>
+          <p className="connection-host">
+            远端: {hostInfo || connection.host || '-'}
+          </p>
+        </div>
+      </div>
+      <div className="connection-actions">
+        {connection.enabled ? (
+          <>
+            <button
+              className="btn btn-primary"
+              onClick={onOpenFolder}
+              title="打开资源管理器"
+            >
+              📁
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={onUnmount}
+              disabled={mountingId === connection.id}
+            >
+              断开
+            </button>
+          </>
+        ) : (
+          <button
+            className="btn btn-success"
+            onClick={onMount}
+            disabled={mountingId === connection.id}
+          >
+            {mountingId === connection.id ? '...' : '连接'}
+          </button>
+        )}
+        <button className="btn btn-secondary" onClick={onEdit}>
+          编辑
+        </button>
+        <button className="btn btn-secondary" onClick={onDelete}>
+          删除
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface AddModalProps {
   onClose: () => void;
   onAdded: () => void;
@@ -264,7 +368,26 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [autoMount, setAutoMount] = useState(false);
+  const [mountPoint, setMountPoint] = useState('');
+  const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    loadAvailableDrives();
+  }, []);
+
+  const loadAvailableDrives = async () => {
+    try {
+      const drives = await invoke<string[]>('get_available_drives');
+      setAvailableDrives(drives);
+      if (drives.length > 0) {
+        // 选择第一个未使用的盘符后面的字母
+        setMountPoint(drives[drives.length - 1] || 'Z:');
+      }
+    } catch (e) {
+      console.error('Failed to get drives:', e);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -278,6 +401,7 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
         username,
         password,
         autoMount,
+        mountPoint: mountPoint || null,
       });
       onAdded();
     } catch (error) {
@@ -321,6 +445,16 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
               placeholder={type === 'webdav' ? 'https://example.com/dav' : '192.168.1.100'}
               required
             />
+          </div>
+
+          <div className="form-group">
+            <label>挂载盘符</label>
+            <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+              <option value="">自动选择</option>
+              {availableDrives.map(drive => (
+                <option key={drive} value={drive}>{drive} (可用)</option>
+              ))}
+            </select>
           </div>
 
           <div className="form-group">
@@ -377,21 +511,40 @@ interface EditModalProps {
 function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [name, setName] = useState(connection.name);
   const [type, setType] = useState(connection.connection_type);
+  const [host, setHost] = useState(connection.host || '');
+  const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
   const [password, setPassword] = useState('');
+  const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    loadAvailableDrives();
+  }, []);
+
+  const loadAvailableDrives = async () => {
+    try {
+      const drives = await invoke<string[]>('get_available_drives');
+      setAvailableDrives(drives);
+    } catch (e) {
+      console.error('Failed to get drives:', e);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
 
     try {
-      await invoke('update_connection', {
+      await invoke('update_connection_full', {
         id: connection.id,
         name,
         connectionType: type,
-        autoMount,
+        host,
+        username: connection.username || '',
         password: password || null,
+        mountPoint: mountPoint || null,
+        autoMount,
       });
       onUpdated();
     } catch (error) {
@@ -422,6 +575,29 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             <select value={type} onChange={(e) => setType(e.target.value)}>
               <option value="webdav">WebDAV</option>
               <option value="smb">SMB/CIFS</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>{type === 'webdav' ? 'URL (远端)' : '主机地址 (远端)'}</label>
+            <input
+              type="text"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder={type === 'webdav' ? 'https://example.com/dav' : '192.168.1.100'}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>挂载盘符</label>
+            <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+              <option value="">自动选择</option>
+              {availableDrives.map(drive => (
+                <option key={drive} value={drive}>{drive}</option>
+              ))}
+              {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
+                <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
+              )}
             </select>
           </div>
 

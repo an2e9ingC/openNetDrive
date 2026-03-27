@@ -454,6 +454,135 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_available_drives() -> Result<Vec<String>, String> {
+    // 获取可用盘符 (A-Z)
+    let mut drives = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:", letter as char);
+        let path = format!("{}\\", drive);
+        if std::path::Path::new(&path).exists() {
+            drives.push(drive);
+        }
+    }
+    Ok(drives)
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    info!("Opening folder: {}", path);
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_connection_host_info(id: String) -> Result<String, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    let conn = config.connections.iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "Connection not found".to_string())?;
+
+    let host_info = match &conn.connection_type {
+        ConnectionType::WebDAV { url, .. } => url.clone(),
+        ConnectionType::SMB { host, port, share, path, .. } => {
+            format!("\\\\{}:{}\\{}{}", host, port, share, path)
+        }
+    };
+
+    Ok(host_info)
+}
+
+/// 更新连接的全部信息（包括远端信息和盘符）
+#[tauri::command]
+fn update_connection_full(
+    id: String,
+    name: String,
+    connection_type: String,
+    host: String,
+    username: String,
+    password: Option<String>,
+    mount_point: Option<String>,
+    auto_mount: Option<bool>,
+) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    if let Some(conn) = config.connections.iter_mut().find(|c| c.id == id) {
+        // 更新密码
+        if let Some(ref pwd) = password {
+            if !pwd.is_empty() {
+                if let Ok(cred_manager) = CredentialManager::new() {
+                    let _ = cred_manager.store_for_connection(&id, &username, pwd);
+                }
+            }
+        }
+
+        conn.name = name;
+        conn.auto_mount = auto_mount.unwrap_or(conn.auto_mount);
+        conn.mount_point = mount_point;
+
+        // 更新连接类型和远端信息
+        match connection_type.as_str() {
+            "webdav" => {
+                conn.connection_type = ConnectionType::WebDAV {
+                    url: host,
+                    username,
+                    password: None,
+                };
+            }
+            "smb" => {
+                // 解析 host 字符串 (支持 host:port 格式)
+                let parts: Vec<&str> = host.split(':').collect();
+                let (smb_host, smb_port) = if parts.len() >= 2 {
+                    (parts[0].to_string(), parts[1].parse().unwrap_or(445))
+                } else {
+                    (host, 445)
+                };
+
+                conn.connection_type = ConnectionType::SMB {
+                    host: smb_host,
+                    port: smb_port,
+                    share: "share".to_string(),
+                    path: "/".to_string(),
+                    username,
+                    password: None,
+                };
+            }
+            _ => return Err("Invalid connection type".to_string()),
+        }
+
+        config.save().map_err(|e| e.to_string())?;
+        info!("Updated connection: {}", id);
+        Ok(())
+    } else {
+        Err("Connection not found".to_string())
+    }
+}
+
 async fn init_auto_mount() {
     if let Ok(config) = Config::load() {
         for conn in config.connections.iter().filter(|c| c.auto_mount && !c.enabled) {
@@ -563,10 +692,14 @@ fn main() {
             mount_connection,
             unmount_connection,
             update_connection,
+            update_connection_full,
             auto_mount_connections,
             get_mounted_connections,
             get_settings,
-            save_settings
+            save_settings,
+            get_available_drives,
+            open_folder,
+            get_connection_host_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
