@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use log::{info, error, warn};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 
 // Global mount state
 struct MountState {
@@ -42,6 +47,25 @@ pub struct MountResult {
     pub success: bool,
     pub mount_point: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppSettings {
+    pub dark_mode: bool,
+    pub start_minimized: bool,
+    pub auto_start: bool,
+    pub log_level: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            dark_mode: false,
+            start_minimized: false,
+            auto_start: false,
+            log_level: "info".to_string(),
+        }
+    }
 }
 
 #[tauri::command]
@@ -119,7 +143,7 @@ async fn add_connection(
         "webdav" => ConnectionType::WebDAV {
             url: host,
             username,
-            password: None, // Password stored in credential manager
+            password: None,
         },
         "smb" => ConnectionType::SMB {
             host,
@@ -127,7 +151,7 @@ async fn add_connection(
             share: "share".to_string(),
             path: "/".to_string(),
             username,
-            password: None, // Password stored in credential manager
+            password: None,
         },
         _ => return Err("Invalid connection type".to_string()),
     };
@@ -159,7 +183,6 @@ fn remove_connection(id: String) -> Result<(), String> {
             ConnectionType::SMB { username, .. } => username,
         };
 
-        // Remove credentials
         if let Ok(cred_manager) = CredentialManager::new() {
             let _ = cred_manager.delete_for_connection(&id, username);
         }
@@ -185,7 +208,6 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         .ok_or_else(|| "Connection not found".to_string())?
         .clone();
 
-    // Check if already mounted
     {
         let drivers = MOUNT_STATE.drivers.read().await;
         if drivers.contains_key(&id) {
@@ -197,7 +219,6 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         }
     }
 
-    // Get password from credential manager
     let password = {
         let username = match &conn.connection_type {
             ConnectionType::WebDAV { username, .. } => username,
@@ -211,7 +232,6 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         }
     };
 
-    // Create protocol instance based on connection type
     let protocol: Box<dyn opennetdrive_core::Protocol> = match &conn.connection_type {
         ConnectionType::WebDAV { url, username, .. } => {
             let client = WebDAVClient::new(url, username, password.as_deref())
@@ -231,27 +251,22 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         }
     };
 
-    // Determine mount point (drive letter)
     let mount_point = conn.mount_point.unwrap_or_else(|| {
-        // Find available drive letter
         ('Z'..='A').rev()
             .map(|c| format!("{}:", c))
             .find(|drive| !std::path::Path::new(&format!("{}\\", drive)).exists())
             .unwrap_or_else(|| "X:".to_string())
     });
 
-    // Create and start the driver
     let mut driver = WinFspDriver::new(mount_point.clone(), protocol);
 
     match driver.start().await {
         Ok(_) => {
-            // Store the driver
             {
                 let mut drivers = MOUNT_STATE.drivers.write().await;
                 drivers.insert(id.clone(), driver);
             }
 
-            // Update config to mark as enabled
             let mut config = Config::load().map_err(|e| e.to_string())?;
             if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
                 c.enabled = true;
@@ -282,7 +297,6 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
 async fn unmount_connection(id: String) -> Result<(), String> {
     info!("Unmounting connection: {}", id);
 
-    // Stop and remove the driver
     {
         let mut drivers = MOUNT_STATE.drivers.write().await;
         if let Some(mut driver) = drivers.remove(&id) {
@@ -293,7 +307,6 @@ async fn unmount_connection(id: String) -> Result<(), String> {
         }
     }
 
-    // Update config to mark as disabled
     let mut config = Config::load().map_err(|e| e.to_string())?;
     if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
         c.enabled = false;
@@ -316,7 +329,6 @@ fn update_connection(
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
     if let Some(conn) = config.connections.iter_mut().find(|c| c.id == id) {
-        // Update password if provided
         if let Some(ref pwd) = password {
             if !pwd.is_empty() {
                 let username = match &conn.connection_type {
@@ -333,7 +345,6 @@ fn update_connection(
         conn.name = name;
         conn.auto_mount = auto_mount.unwrap_or(conn.auto_mount);
 
-        // Update connection type if needed
         match connection_type.as_str() {
             "webdav" => {
                 if let ConnectionType::SMB { .. } = &conn.connection_type {
@@ -389,7 +400,60 @@ async fn auto_mount_connections() -> Result<Vec<MountResult>, String> {
     Ok(results)
 }
 
-/// Initialize auto-mount for connections marked as auto_mount
+#[tauri::command]
+fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    let mounted: Vec<ConnectionInfo> = config.connections.iter()
+        .filter(|c| c.enabled)
+        .map(|c| {
+            let (connection_type, host, username) = match &c.connection_type {
+                ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone())),
+                ConnectionType::SMB { host, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone())),
+            };
+
+            ConnectionInfo {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                connection_type,
+                mount_point: c.mount_point.clone(),
+                auto_mount: c.auto_mount,
+                enabled: c.enabled,
+                host,
+                username,
+            }
+        })
+        .collect();
+
+    Ok(mounted)
+}
+
+#[tauri::command]
+fn get_settings() -> Result<AppSettings, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    Ok(AppSettings {
+        dark_mode: config.dark_mode,
+        start_minimized: false,
+        auto_start: config.start_on_boot,
+        log_level: config.log_level,
+    })
+}
+
+#[tauri::command]
+fn save_settings(settings: AppSettings) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    config.dark_mode = settings.dark_mode;
+    config.start_on_boot = settings.auto_start;
+    config.log_level = settings.log_level;
+
+    config.save().map_err(|e| e.to_string())?;
+
+    info!("Settings saved");
+    Ok(())
+}
+
 async fn init_auto_mount() {
     if let Ok(config) = Config::load() {
         for conn in config.connections.iter().filter(|c| c.auto_mount && !c.enabled) {
@@ -412,7 +476,6 @@ async fn init_auto_mount() {
 }
 
 fn main() {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -422,7 +485,6 @@ fn main() {
 
     info!("Starting openNetDrive...");
 
-    // Auto-mount connections on startup
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     runtime.block_on(async {
         init_auto_mount().await;
@@ -431,6 +493,68 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            info!("Setting up application...");
+
+            // Create system tray menu
+            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let hide_item = MenuItem::with_id(app, "hide", "隐藏窗口", true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+
+            // Create tray icon
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .menu(&menu)
+                .menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "quit" => {
+                            info!("Quit requested from tray");
+                            app.exit(0);
+                        }
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "hide" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            info!("System tray initialized");
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Hide window instead of closing (minimize to tray)
+                let _ = window.hide();
+                api.prevent_close();
+                info!("Window hidden to tray");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_connections,
             get_connection_details,
@@ -439,7 +563,10 @@ fn main() {
             mount_connection,
             unmount_connection,
             update_connection,
-            auto_mount_connections
+            auto_mount_connections,
+            get_mounted_connections,
+            get_settings,
+            save_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

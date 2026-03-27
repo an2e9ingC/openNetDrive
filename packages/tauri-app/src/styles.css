@@ -54,6 +54,17 @@ body {
   font-size: 0.9rem;
 }
 
+.status-badge {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 4px 12px;
+  background: var(--success);
+  color: white;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
 .main {
   flex: 1;
   padding: 20px 0;
@@ -354,4 +365,25 @@ body {
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* About Modal */
+.about-content {
+  text-align: center;
+}
+
+.about-content p {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
+
+.about-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+.about-content .copyright {
+  font-size: 0.8rem;
+  opacity: 0.7;
 }

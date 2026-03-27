@@ -17,14 +17,24 @@ interface Toast {
   type: 'success' | 'error' | 'info';
 }
 
+interface AppSettings {
+  dark_mode: boolean;
+  start_minimized: boolean;
+  auto_start: boolean;
+  log_level: string;
+}
+
 function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const [editingConnection, setEditingConnection] = useState<Connection | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast | null>(null);
   const [mountingId, setMountingId] = useState<string | null>(null);
+  const [mountedCount, setMountedCount] = useState(0);
 
   useEffect(() => {
     loadConnections();
@@ -36,6 +46,10 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  useEffect(() => {
+    setMountedCount(connections.filter(c => c.enabled).length);
+  }, [connections]);
 
   const loadConnections = async () => {
     setLoading(true);
@@ -53,8 +67,12 @@ function App() {
   const handleMount = async (id: string) => {
     setMountingId(id);
     try {
-      await invoke('mount_connection', { id });
-      setToast({ message: '挂载成功', type: 'success' });
+      const result = await invoke<{ success: boolean; message: string }>('mount_connection', { id });
+      if (result.success) {
+        setToast({ message: `挂载成功 - ${result.message}`, type: 'success' });
+      } else {
+        setToast({ message: result.message, type: 'error' });
+      }
       loadConnections();
     } catch (error) {
       console.error('Failed to mount:', error);
@@ -98,6 +116,11 @@ function App() {
       <header className="header">
         <h1>openNetDrive</h1>
         <p className="subtitle">网络驱动器挂载工具</p>
+        {mountedCount > 0 && (
+          <div className="status-badge">
+            已连接 {mountedCount} 个驱动器
+          </div>
+        )}
       </header>
 
       {toast && (
@@ -138,7 +161,7 @@ function App() {
                   <div className="connection-details">
                     <h3>{conn.name}</h3>
                     <p className="connection-meta">
-                      {conn.connection_type} • {conn.mount_point || '未挂载'}
+                      {conn.connection_type === 'webdav' ? 'WebDAV' : 'SMB'} • {conn.mount_point || '未挂载'}
                       {conn.auto_mount && ' • 自动挂载'}
                     </p>
                   </div>
@@ -181,9 +204,8 @@ function App() {
       </main>
 
       <footer className="footer">
-        <span>⚙ 设置</span>
-        <span>📊 日志</span>
-        <span>ℹ️ 关于</span>
+        <span onClick={() => setShowSettingsModal(true)}>⚙ 设置</span>
+        <span onClick={() => setShowAboutModal(true)}>ℹ️ 关于</span>
       </footer>
 
       {showAddModal && (
@@ -211,6 +233,20 @@ function App() {
             setToast({ message: '连接已更新', type: 'success' });
           }}
         />
+      )}
+
+      {showSettingsModal && (
+        <SettingsModal
+          onClose={() => setShowSettingsModal(false)}
+          onSaved={() => {
+            setShowSettingsModal(false);
+            setToast({ message: '设置已保存', type: 'success' });
+          }}
+        />
+      )}
+
+      {showAboutModal && (
+        <AboutModal onClose={() => setShowAboutModal(false)} />
       )}
     </div>
   );
@@ -342,6 +378,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [name, setName] = useState(connection.name);
   const [type, setType] = useState(connection.connection_type);
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -354,6 +391,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
         name,
         connectionType: type,
         autoMount,
+        password: password || null,
       });
       onUpdated();
     } catch (error) {
@@ -387,6 +425,16 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </select>
           </div>
 
+          <div className="form-group">
+            <label>新密码（留空保持不变）</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="输入新密码"
+            />
+          </div>
+
           <div className="form-group checkbox-group">
             <label className="checkbox-label">
               <input
@@ -407,6 +455,128 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+interface SettingsModalProps {
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
+  const [darkMode, setDarkMode] = useState(false);
+  const [autoStart, setAutoStart] = useState(false);
+  const [logLevel, setLogLevel] = useState('info');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const settings = await invoke<AppSettings>('get_settings');
+      setDarkMode(settings.dark_mode);
+      setAutoStart(settings.auto_start);
+      setLogLevel(settings.log_level);
+    } catch (error) {
+      console.error('Failed to load settings:', error);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    try {
+      await invoke('save_settings', {
+        settings: {
+          dark_mode: darkMode,
+          start_minimized: false,
+          auto_start: autoStart,
+          log_level: logLevel,
+        },
+      });
+      onSaved();
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+      alert('保存失败：' + error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>⚙️ 设置</h2>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group checkbox-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={darkMode}
+                onChange={(e) => setDarkMode(e.target.checked)}
+              />
+              <span>深色模式</span>
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={autoStart}
+                onChange={(e) => setAutoStart(e.target.checked)}
+              />
+              <span>开机自动启动</span>
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>日志级别</label>
+            <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+              <option value="debug">Debug</option>
+              <option value="info">Info</option>
+              <option value="warn">Warning</option>
+              <option value="error">Error</option>
+            </select>
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>
+              取消
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? '保存中...' : '保存'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AboutModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>ℹ️ 关于 openNetDrive</h2>
+        <div className="about-content">
+          <p><strong>版本:</strong> 0.1.0</p>
+          <p><strong>描述:</strong> 跨平台的网络驱动器挂载工具</p>
+          <p>支持通过 WebDAV/SMB 协议将 NAS 共享文件夹映射为本地磁盘。</p>
+          <hr />
+          <p className="copyright">基于 Tauri + React + Rust 构建</p>
+          <p className="copyright">采用 GPL-3.0 协议开源</p>
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            关闭
+          </button>
+        </div>
       </div>
     </div>
   );
