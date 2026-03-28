@@ -278,6 +278,17 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
 
     match driver.start().await {
         Ok(_) => {
+            // 验证挂载点是否真正存在
+            let mount_path = format!("{}\\", mount_point);
+            if !std::path::Path::new(&mount_path).exists() {
+                error!("Mount failed: mount point {} does not exist", mount_point);
+                return Ok(MountResult {
+                    success: false,
+                    mount_point: Some(mount_point),
+                    message: "挂载失败：磁盘未成功创建，请检查网络连接或配置".to_string(),
+                });
+            }
+
             {
                 let mut drivers = MOUNT_STATE.drivers.write().await;
                 drivers.insert(id.clone(), driver);
@@ -524,6 +535,11 @@ fn get_available_drives() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     info!("Opening folder: {}", path);
+
+    // 检查路径是否存在
+    if !std::path::Path::new(&path).exists() {
+        return Err("路径不存在，请先确认磁盘已正确挂载".to_string());
+    }
 
     #[cfg(target_os = "windows")]
     {
