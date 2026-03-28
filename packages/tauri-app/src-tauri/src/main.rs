@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use opennetdrive_core::{Config, ConnectionConfig, ConnectionType, WebDAVClient, create_smb_client, CredentialManager};
+use opennetdrive_core::{Config, ConnectionConfig, ConnectionType, WebDAVClient, create_smb_client, mount_smb_share, CredentialManager};
 use opennetdrive_mount_win::WinFspDriver;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -240,82 +240,128 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         }
     };
 
-    let protocol: Box<dyn opennetdrive_core::Protocol> = match &conn.connection_type {
-        ConnectionType::WebDAV { url, username, .. } => {
-            let client = WebDAVClient::new(url, username, password.as_deref())
-                .map_err(|e| format!("Failed to create WebDAV client: {}", e))?;
-            Box::new(client)
-        }
-        ConnectionType::SMB { host, port, share, path, username, .. } => {
-            let client = create_smb_client(
-                host,
-                *port,
-                share,
-                path,
-                username,
-                password.as_deref(),
-            ).map_err(|e| format!("Failed to create SMB client: {}", e))?;
-            Box::new(client)
-        }
-    };
-
-    // 如果连接没有指定盘符，或指定的盘符已被占用，自动分配一个可用盘符
+    // 根据协议类型处理挂载
     let mount_point = if let Some(ref mp) = conn.mount_point {
-        // 检查指定盘符是否可用
         let path = format!("{}\\", mp);
         if !std::path::Path::new(&path).exists() {
             mp.clone()
         } else {
-            // 盘符被占用，从后往前找可用盘符
             find_available_drive().unwrap_or_else(|| "X:".to_string())
         }
     } else {
-        // 未指定盘符，自动分配
         find_available_drive().unwrap_or_else(|| "X:".to_string())
     };
 
-    let mut driver = WinFspDriver::new(mount_point.clone(), protocol);
+    // SMB 协议使用 net use 直接挂载
+    if let ConnectionType::SMB { host, port, share, path, username, .. } = &conn.connection_type {
+        info!("Mounting SMB share: \\{}{}\\{}", host, share, path);
 
-    match driver.start().await {
-        Ok(_) => {
-            // 验证挂载点是否真正存在
-            let mount_path = format!("{}\\", mount_point);
-            if !std::path::Path::new(&mount_path).exists() {
-                error!("Mount failed: mount point {} does not exist", mount_point);
-                return Ok(MountResult {
+        // 使用 net use 直接挂载
+        match mount_smb_share(
+            host,
+            *port,
+            share,
+            path,
+            username,
+            password.as_deref(),
+            &mount_point,
+        ).await {
+            Ok(true) => {
+                // 验证挂载点存在
+                let mount_path = format!("{}\\", mount_point);
+                if !std::path::Path::new(&mount_path).exists() {
+                    return Ok(MountResult {
+                        success: false,
+                        mount_point: Some(mount_point),
+                        message: "挂载命令执行成功，但磁盘未生效，请检查网络连接".to_string(),
+                    });
+                }
+
+                // 保存挂载状态
+                let mut config = Config::load().map_err(|e| e.to_string())?;
+                if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
+                    c.enabled = true;
+                    c.mount_point = Some(mount_point.clone());
+                }
+                config.save().map_err(|e| e.to_string())?;
+
+                info!("Successfully mounted SMB {} to {}", conn.name, mount_point);
+
+                Ok(MountResult {
+                    success: true,
+                    mount_point: Some(mount_point.clone()),
+                    message: format!("已成功挂载到 {}", mount_point),
+                })
+            }
+            Ok(false) => {
+                Ok(MountResult {
                     success: false,
-                    mount_point: Some(mount_point),
-                    message: "挂载失败：磁盘未成功创建，请检查网络连接或配置".to_string(),
-                });
+                    mount_point: None,
+                    message: "无法连接到 SMB 服务器，请检查网络连接、服务器地址和凭据".to_string(),
+                })
             }
-
-            {
-                let mut drivers = MOUNT_STATE.drivers.write().await;
-                drivers.insert(id.clone(), driver);
+            Err(e) => {
+                let error_msg = format!("{}", e);
+                error!("Failed to mount SMB: {}", error_msg);
+                Ok(MountResult {
+                    success: false,
+                    mount_point: None,
+                    message: error_msg,
+                })
             }
-
-            let mut config = Config::load().map_err(|e| e.to_string())?;
-            if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
-                c.enabled = true;
-                c.mount_point = Some(mount_point.clone());
-            }
-            config.save().map_err(|e| e.to_string())?;
-
-            info!("Successfully mounted {} at {}", id, mount_point);
-
-            Ok(MountResult {
-                success: true,
-                mount_point: Some(mount_point),
-                message: "Mounted successfully".to_string(),
-            })
         }
-        Err(e) => {
-            error!("Failed to mount {}: {}", id, e);
-            Ok(MountResult {
-                success: false,
-                mount_point: None,
-                message: format!("Failed to mount: {}", e),
-            })
+    } else {
+        // WebDAV 协议使用 WinFsp
+        let protocol: Box<dyn opennetdrive_core::Protocol> = match &conn.connection_type {
+            ConnectionType::WebDAV { url, username, .. } => {
+                let client = WebDAVClient::new(url, username, password.as_deref())
+                    .map_err(|e| format!("Failed to create WebDAV client: {}", e))?;
+                Box::new(client)
+            }
+            _ => return Err("Unsupported connection type".to_string()),
+        };
+
+        let mut driver = WinFspDriver::new(mount_point.clone(), protocol);
+
+        match driver.start().await {
+            Ok(_) => {
+                let mount_path = format!("{}\\", mount_point);
+                if !std::path::Path::new(&mount_path).exists() {
+                    return Ok(MountResult {
+                        success: false,
+                        mount_point: Some(mount_point),
+                        message: "挂载失败：磁盘未成功创建，请检查网络连接或配置".to_string(),
+                    });
+                }
+
+                {
+                    let mut drivers = MOUNT_STATE.drivers.write().await;
+                    drivers.insert(id.clone(), driver);
+                }
+
+                let mut config = Config::load().map_err(|e| e.to_string())?;
+                if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
+                    c.enabled = true;
+                    c.mount_point = Some(mount_point.clone());
+                }
+                config.save().map_err(|e| e.to_string())?;
+
+                info!("Successfully mounted {} at {}", id, mount_point);
+
+                Ok(MountResult {
+                    success: true,
+                    mount_point: Some(mount_point),
+                    message: "Mounted successfully".to_string(),
+                })
+            }
+            Err(e) => {
+                error!("Failed to mount {}: {}", id, e);
+                Ok(MountResult {
+                    success: false,
+                    mount_point: None,
+                    message: format!("Failed to mount: {}", e),
+                })
+            }
         }
     }
 }

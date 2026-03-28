@@ -17,4 +17,4 @@ pub use protocol::{Protocol, ProtocolProvider};
 pub use credentials::CredentialManager;
 pub use error::{Result, Error};
 pub use webdav::WebDAVClient;
-pub use smb::{SMBClient, create_smb_client};
+pub use smb::{SMBClient, create_smb_client, mount_smb_share};
