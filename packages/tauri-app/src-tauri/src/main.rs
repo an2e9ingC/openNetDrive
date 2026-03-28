@@ -40,6 +40,8 @@ pub struct ConnectionInfo {
     pub enabled: bool,
     pub host: Option<String>,
     pub username: Option<String>,
+    pub share: Option<String>,       // SMB 共享名称
+    pub remote_path: Option<String>, // SMB 远程路径
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,9 +75,9 @@ fn get_connections() -> Result<Vec<ConnectionInfo>, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
 
     let connections = config.connections.iter().map(|c| {
-        let (connection_type, host, username) = match &c.connection_type {
-            ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone())),
-            ConnectionType::SMB { host, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone())),
+        let (connection_type, host, username, share, remote_path) = match &c.connection_type {
+            ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
+            ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
         };
 
         ConnectionInfo {
@@ -87,6 +89,8 @@ fn get_connections() -> Result<Vec<ConnectionInfo>, String> {
             enabled: c.enabled,
             host,
             username,
+            share,
+            remote_path,
         }
     }).collect();
 
@@ -101,9 +105,9 @@ fn get_connection_details(id: String) -> Result<ConnectionInfo, String> {
         .find(|c| c.id == id)
         .ok_or_else(|| "Connection not found".to_string())?;
 
-    let (connection_type, host, username) = match &conn.connection_type {
-        ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone())),
-        ConnectionType::SMB { host, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone())),
+    let (connection_type, host, username, share, remote_path) = match &conn.connection_type {
+        ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
+        ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
     };
 
     Ok(ConnectionInfo {
@@ -115,6 +119,8 @@ fn get_connection_details(id: String) -> Result<ConnectionInfo, String> {
         enabled: conn.enabled,
         host,
         username,
+        share,
+        remote_path,
     })
 }
 
@@ -123,6 +129,8 @@ async fn add_connection(
     name: String,
     connection_type: String,
     host: String,
+    share: Option<String>,
+    remote_path: Option<String>,
     username: String,
     password: Option<String>,
     auto_mount: Option<bool>,
@@ -148,8 +156,8 @@ async fn add_connection(
         "smb" => ConnectionType::SMB {
             host,
             port: 445,
-            share: "share".to_string(),
-            path: "/".to_string(),
+            share: share.unwrap_or_else(|| "share".to_string()),
+            path: remote_path.unwrap_or_else(|| "/".to_string()),
             username,
             password: None,
         },
@@ -415,9 +423,9 @@ fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
     let mounted: Vec<ConnectionInfo> = config.connections.iter()
         .filter(|c| c.enabled)
         .map(|c| {
-            let (connection_type, host, username) = match &c.connection_type {
-                ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone())),
-                ConnectionType::SMB { host, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone())),
+            let (connection_type, host, username, share, remote_path) = match &c.connection_type {
+                ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
+                ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
             };
 
             ConnectionInfo {
@@ -429,6 +437,8 @@ fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
                 enabled: c.enabled,
                 host,
                 username,
+                share,
+                remote_path,
             }
         })
         .collect();
@@ -486,7 +496,6 @@ fn find_available_drive() -> Option<String> {
 #[tauri::command]
 fn get_available_drives() -> Result<Vec<String>, String> {
     // 获取可用盘符 - 返回未被系统占用的盘符
-    let mut available = Vec::new();
     // 先获取已使用的盘符
     let mut used_drives: std::collections::HashSet<String> = std::collections::HashSet::new();
     for letter in b'A'..=b'Z' {
@@ -498,15 +507,18 @@ fn get_available_drives() -> Result<Vec<String>, String> {
         }
     }
 
-    // 从 Z 到 A 遍历，返回未被占用的盘符（优先使用后面的盘符）
+    // 从 Z 到 A 遍历，找出未被占用的盘符
+    let mut found: Vec<String> = Vec::new();
     for letter in (b'A'..=b'Z').rev() {
         let drive = format!("{}:", letter as char);
         if !used_drives.contains(&drive) {
-            available.push(drive);
+            found.push(drive);
         }
     }
 
-    Ok(available)
+    // 按字母顺序排序返回（A 到 Z）
+    found.sort();
+    Ok(found)
 }
 
 #[tauri::command]
@@ -551,7 +563,13 @@ fn get_connection_host_info(id: String) -> Result<String, String> {
     let host_info = match &conn.connection_type {
         ConnectionType::WebDAV { url, .. } => url.clone(),
         ConnectionType::SMB { host, port, share, path, .. } => {
-            format!("\\\\{}:{}\\{}{}", host, port, share, path)
+            // 统一使用 \ 作为路径分隔符，处理 path 前导的 /
+            let clean_path = path.trim_start_matches('/');
+            if clean_path.is_empty() || clean_path == "." {
+                format!("\\\\{}:{}\\{}", host, port, share)
+            } else {
+                format!("\\\\{}:{}\\{}\\{}", host, port, share, clean_path.replace('/', "\\"))
+            }
         }
     };
 
@@ -565,6 +583,8 @@ fn update_connection_full(
     name: String,
     connection_type: String,
     host: String,
+    share: Option<String>,
+    remote_path: Option<String>,
     username: String,
     password: Option<String>,
     mount_point: Option<String>,
@@ -607,8 +627,8 @@ fn update_connection_full(
                 conn.connection_type = ConnectionType::SMB {
                     host: smb_host,
                     port: smb_port,
-                    share: "share".to_string(),
-                    path: "/".to_string(),
+                    share: share.unwrap_or_else(|| "share".to_string()),
+                    path: remote_path.unwrap_or_else(|| "/".to_string()),
                     username,
                     password: None,
                 };

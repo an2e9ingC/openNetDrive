@@ -11,6 +11,8 @@ interface Connection {
   enabled: boolean;
   host?: string;
   username?: string;
+  share?: string;       // SMB 共享名称
+  remote_path?: string; // SMB 远程路径
 }
 
 interface Toast {
@@ -372,6 +374,8 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState('webdav');
   const [host, setHost] = useState('');
+  const [share, setShare] = useState('');        // SMB 共享名称
+  const [remotePath, setRemotePath] = useState('/'); // SMB 远程路径
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [autoMount, setAutoMount] = useState(false);
@@ -382,6 +386,14 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
   useEffect(() => {
     loadAvailableDrives();
   }, []);
+
+  // 协议类型切换时清空相关字段
+  useEffect(() => {
+    if (type === 'webdav') {
+      setShare('');
+      setRemotePath('/');
+    }
+  }, [type]);
 
   const loadAvailableDrives = async () => {
     try {
@@ -405,6 +417,8 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
         name,
         connectionType: type,
         host,
+        share: share || null,
+        remotePath: remotePath || null,
         username,
         password,
         autoMount,
@@ -439,20 +453,75 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             <label>协议类型</label>
             <select value={type} onChange={(e) => setType(e.target.value)}>
               <option value="webdav">WebDAV</option>
-              <option value="smb">SMB/CIFS</option>
+              <option value="smb">SMB/CIFS (Windows文件共享)</option>
             </select>
           </div>
 
-          <div className="form-group">
-            <label>{type === 'webdav' ? 'URL' : '主机地址'}</label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder={type === 'webdav' ? 'https://example.com/dav' : '192.168.1.100'}
-              required
-            />
-          </div>
+          {type === 'smb' ? (
+            <>
+              {/* SMB 模式：主机和共享在同一行 */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label>服务器地址</label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="192.168.1.100"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>共享名称</label>
+                  <input
+                    type="text"
+                    value={share}
+                    onChange={(e) => setShare(e.target.value)}
+                    placeholder="sharedfolder"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>远程路径 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+                <input
+                  type="text"
+                  value={remotePath}
+                  onChange={(e) => setRemotePath(e.target.value)}
+                  placeholder="例: /documents 或 /"
+                />
+                {/* 实时显示 UNC 路径预览 */}
+                {type === 'smb' && host && (
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '8px 12px',
+                    background: 'var(--bg-primary)',
+                    borderRadius: '4px',
+                    fontSize: '0.8rem',
+                    fontFamily: 'monospace',
+                    color: share ? 'var(--accent)' : 'var(--text-secondary)'
+                  }}>
+                    📍 预览: {share ? (() => {
+                      const cleanPath = remotePath.replace(/^\/+/, '').replace(/\//g, '\\');
+                      return cleanPath ? `\\\\${host}\\${share}\\${cleanPath}` : `\\\\${host}\\${share}`;
+                    })() : `\\\\${host}\\<共享名称>`}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="form-group">
+              <label>WebDAV URL</label>
+              <input
+                type="text"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="https://example.com/dav"
+                required
+              />
+            </div>
+          )}
 
           <div className="form-group">
             <label>挂载盘符</label>
@@ -464,24 +533,26 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             </select>
           </div>
 
-          <div className="form-group">
-            <label>用户名</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="可选"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>密码</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="可选"
-            />
+          {/* 用户名密码在同一行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>用户名 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="可选"
+              />
+            </div>
+            <div className="form-group">
+              <label>密码 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="可选"
+              />
+            </div>
           </div>
 
           <div className="form-group checkbox-group">
@@ -519,6 +590,8 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [name, setName] = useState(connection.name);
   const [type, setType] = useState(connection.connection_type);
   const [host, setHost] = useState(connection.host || '');
+  const [share, setShare] = useState(connection.share || '');         // SMB 共享名称
+  const [remotePath, setRemotePath] = useState(connection.remote_path || '/'); // SMB 远程路径
   const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
   const [password, setPassword] = useState('');
@@ -548,6 +621,8 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
         name,
         connectionType: type,
         host,
+        share: share || null,
+        remotePath: remotePath || null,
         username: connection.username || '',
         password: password || null,
         mountPoint: mountPoint || null,
@@ -581,19 +656,72 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             <label>协议类型</label>
             <select value={type} onChange={(e) => setType(e.target.value)}>
               <option value="webdav">WebDAV</option>
-              <option value="smb">SMB/CIFS</option>
+              <option value="smb">SMB/CIFS (Windows文件共享)</option>
             </select>
           </div>
 
-          <div className="form-group">
-            <label>{type === 'webdav' ? 'URL (远端)' : '主机地址 (远端)'}</label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder={type === 'webdav' ? 'https://example.com/dav' : '192.168.1.100'}
-            />
-          </div>
+          {type === 'smb' ? (
+            <>
+              {/* SMB 模式：主机和共享在同一行 */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label>服务器地址</label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="192.168.1.100"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>共享名称</label>
+                  <input
+                    type="text"
+                    value={share}
+                    onChange={(e) => setShare(e.target.value)}
+                    placeholder="sharedfolder"
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>远程路径 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+                <input
+                  type="text"
+                  value={remotePath}
+                  onChange={(e) => setRemotePath(e.target.value)}
+                  placeholder="例: /documents 或 /"
+                />
+                {/* 实时显示 UNC 路径预览 */}
+                {type === 'smb' && host && (
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '8px 12px',
+                    background: 'var(--bg-primary)',
+                    borderRadius: '4px',
+                    fontSize: '0.8rem',
+                    fontFamily: 'monospace',
+                    color: share ? 'var(--accent)' : 'var(--text-secondary)'
+                  }}>
+                    📍 预览: {share ? (() => {
+                      const cleanPath = remotePath.replace(/^\/+/, '').replace(/\//g, '\\');
+                      return cleanPath ? `\\\\${host}\\${share}\\${cleanPath}` : `\\\\${host}\\${share}`;
+                    })() : `\\\\${host}\\<共享名称>`}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="form-group">
+              <label>WebDAV URL</label>
+              <input
+                type="text"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="https://example.com/dav"
+              />
+            </div>
+          )}
 
           <div className="form-group">
             <label>挂载盘符</label>

@@ -229,13 +229,32 @@ body {
   border-radius: 12px;
   padding: 24px;
   width: 90%;
-  max-width: 400px;
+  max-width: 420px;
+  max-height: 90vh;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
 }
 
 .modal h2 {
   margin-bottom: 20px;
   font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+/* 内联表单布局 */
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-row .form-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-row input,
+.form-row select {
+  width: 100%;
 }
 
 .form-group {
