@@ -371,68 +371,155 @@ async fn unmount_connection(id: String) -> Result<(), String> {
     info!("Unmounting connection: {}", id);
 
     // 先查找连接信息
-    let config = Config::load().map_err(|e| e.to_string())?;
-    let conn = config.connections.iter().find(|c| c.id == id);
+    let config_result = Config::load();
 
-    if let Some(conn) = conn {
-        // 如果是 SMB 类型，使用 net use 断开
-        if let ConnectionType::SMB { .. } = &conn.connection_type {
+    // 无论能否加载配置，都尝试从系统获取已挂载的网络驱动器
+    let mut unmounted = false;
+
+    // 从系统获取当前已挂载的网络驱动器
+    let output = std::process::Command::new("net")
+        .args(["use"])
+        .output()
+        .map_err(|e| format!("Failed to get net use list: {}", e))?;
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    info!("Current net use output:\n{}", output_str);
+
+    // 尝试用 ID 作为驱动器号断开
+    // 假设 id 可能是驱动器号如 "Z" 或完整名称
+    let drive_letters = ['Z', 'Y', 'X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M', 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A'];
+
+    // 如果 ID 看起来像驱动器号，尝试断开它
+    if id.len() == 1 && id.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+        let drive_with_colon = format!("{}:", id.to_uppercase());
+        info!("Trying to unmount drive: {}", drive_with_colon);
+
+        let output = std::process::Command::new("net")
+            .args(["use", &drive_with_colon, "/delete", "/y"])
+            .output()
+            .map_err(|e| format!("Failed to execute net use: {}", e))?;
+
+        if output.status.success() {
+            info!("Successfully unmounted drive {}", drive_with_colon);
+            unmounted = true;
+        } else {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            info!("net use result: {} {}", stdout, stderr);
+        }
+    } else if let Ok(config) = config_result {
+        // 从配置中查找连接
+        if let Some(conn) = config.connections.iter().find(|c| c.id == id) {
+            info!("Found connection in config: {} mount_point: {:?}", conn.name, conn.mount_point);
+
             if let Some(ref mount_point) = conn.mount_point {
                 let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
-                let drive_with_colon = format!("{}:", drive);
+                let drive_with_colon = format!("{}:", drive.to_uppercase());
 
-                info!("Unmounting SMB drive: {}", drive_with_colon);
+                info!("Trying to unmount: {}", drive_with_colon);
 
                 let output = std::process::Command::new("net")
                     .args(["use", &drive_with_colon, "/delete", "/y"])
                     .output()
                     .map_err(|e| format!("Failed to execute net use: {}", e))?;
 
-                if !output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    // 如果已经断开，返回成功
-                    if stdout.contains("The network connection could not be found") ||
-                       stderr.contains("The network connection could not be found") ||
-                       stdout.contains("找不到网络连接") {
-                        info!("SMB drive {} already unmounted", drive_with_colon);
-                    } else {
-                        warn!("Failed to unmount SMB: {} {}", stdout, stderr);
-                    }
-                } else {
-                    info!("Successfully unmounted SMB drive {}", drive_with_colon);
+                if output.status.success() {
+                    info!("Successfully unmounted drive {}", drive_with_colon);
+                    unmounted = true;
                 }
             }
-        } else {
-            // WebDAV 使用 WinFspDriver
-            let mut drivers = MOUNT_STATE.drivers.write().await;
-            if let Some(mut driver) = drivers.remove(&id) {
-                driver.stop().await
-                    .map_err(|e| format!("Failed to stop mount: {}", e))?;
-            } else {
-                return Err("Connection not mounted".to_string());
-            }
         }
-    } else {
-        // 如果找不到连接，尝试从 drivers 中查找
+
+        // 更新配置
+        let mut config = config;
+        if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
+            c.enabled = false;
+            c.mount_point = None;
+            let _ = config.save();
+            info!("Updated config for {}", id);
+        }
+    }
+
+    // 尝试从 drivers 中查找（用于 WebDAV）
+    {
         let mut drivers = MOUNT_STATE.drivers.write().await;
         if let Some(mut driver) = drivers.remove(&id) {
             driver.stop().await
                 .map_err(|e| format!("Failed to stop mount: {}", e))?;
-        } else {
-            return Err("Connection not mounted".to_string());
+            unmounted = true;
         }
     }
 
-    let mut config = Config::load().map_err(|e| e.to_string())?;
-    if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
-        c.enabled = false;
-        c.mount_point = None;
+    if unmounted {
+        info!("Successfully unmounted {}", id);
+        Ok(())
+    } else {
+        // 即使没有成功断开，也不报错，因为可能已经断开了
+        info!("Could not find mounted connection for {}, assuming already unmounted", id);
+        Ok(())
     }
-    config.save().map_err(|e| e.to_string())?;
+}
 
-    info!("Successfully unmounted {}", id);
-    Ok(())
+/// Get list of currently mounted network drives from system
+#[derive(Debug, Serialize)]
+pub struct MountedDrive {
+    pub drive: String,
+    pub remote: String,
+    pub status: String,
+}
+
+#[tauri::command]
+fn get_mounted_drives() -> Result<Vec<MountedDrive>, String> {
+    info!("Getting mounted drives...");
+
+    let output = std::process::Command::new("net")
+        .args(["use"])
+        .output()
+        .map_err(|e| format!("Failed to get net use list: {}", e))?;
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    info!("net use output:\n{}", output_str);
+
+    let mut drives = Vec::new();
+
+    // 解析输出，格式类似：
+    // Z:        \\server\share    Microsoft Windows Network
+    for line in output_str.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // 检查是否是驱动器行（以字母冒号开头）
+        if line.len() >= 2 && line.chars().nth(1) == Some(':') {
+            let drive = line[0..2].to_string();
+            let rest = line[3..].trim();
+
+            // 提取远程路径
+            let remote = if rest.starts_with("\\\\") || rest.starts_with("//") {
+                rest.split_whitespace().next().unwrap_or("").to_string()
+            } else {
+                String::new()
+            };
+
+            let status = if !remote.is_empty() {
+                "Connected".to_string()
+            } else {
+                "Disconnected".to_string()
+            };
+
+            if !drive.is_empty() {
+                drives.push(MountedDrive {
+                    drive,
+                    remote,
+                    status,
+                });
+            }
+        }
+    }
+
+    info!("Found {} mounted drives", drives.len());
+    Ok(drives)
 }
 
 #[tauri::command]
@@ -866,7 +953,8 @@ fn main() {
             save_settings,
             get_available_drives,
             open_folder,
-            get_connection_host_info
+            get_connection_host_info,
+            get_mounted_drives
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
