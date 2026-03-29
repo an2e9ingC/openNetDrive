@@ -135,13 +135,9 @@ impl SMBClient {
 
         // Add credentials if provided
         if !self.config.username.is_empty() {
-            args.push("/user:".to_string());
-            if self.config.username.contains('\\') {
-                args.push(self.config.username.clone());
-            } else {
-                args.push(format!("{}\\
-{}", self.config.host, self.config.username));
-            }
+            // Format: /user:domainusername or /user:username@domain.com
+            let user_arg = format!("/user:{}", self.config.username);
+            args.push(user_arg);
             if let Some(ref password) = self.config.password {
                 args.push(password.clone());
             }
@@ -223,12 +219,13 @@ impl SMBClient {
 
         // Add credentials if provided
         if !self.config.username.is_empty() {
-            args.push("/user:".to_string());
-            if self.config.username.contains('\\') {
-                args.push(self.config.username.clone());
+            // Format: /user:domain\username or /user:username@domain.com
+            let user_arg = if self.config.username.contains('\\') || self.config.username.contains('@') {
+                format!("/user:{}", self.config.username)
             } else {
-                args.push(format!("{}\\{}", self.config.host, self.config.username));
-            }
+                format!("/user:{}", self.config.username)
+            };
+            args.push(user_arg);
             if let Some(ref password) = self.config.password {
                 args.push(password.clone());
             }
