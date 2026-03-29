@@ -1,15 +1,28 @@
 //! SMB protocol implementation
 //!
-//! Note: Full SMB implementation requires external dependencies.
-//! This is a simplified implementation for basic operations.
+//! Uses Windows native SMB support via command line for connection testing and mounting
 
-use crate::error::Result;
-use crate::protocol::{Protocol, FileEntry};
+use crate::error::{Error, Result};
+use crate::protocol::{FileEntry, Protocol};
 use async_trait::async_trait;
-use log::debug;
+use encoding_rs::GBK;
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// Convert Windows command output from GBK to String
+/// Windows console uses GBK encoding by default, not UTF-8
+fn decode_windows_output(bytes: &[u8]) -> String {
+    // Try UTF-8 first (in case user has chcp 65001)
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    // Fall back to GBK
+    let (decoded, _, _) = GBK.decode(bytes);
+    decoded.into_owned()
+}
 
 /// SMB client configuration
 #[derive(Debug, Clone)]
@@ -27,6 +40,7 @@ pub struct SMBConfig {
 struct SMBState {
     connected: bool,
     server: String,
+    drive_letter: Option<String>,
 }
 
 /// SMB Protocol Client
@@ -36,6 +50,7 @@ pub struct SMBClient {
     // In-memory file cache for demonstration
     // In production, this would use actual SMB connection
     file_cache: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    drive_letter: Arc<Mutex<Option<String>>>,
 }
 
 impl SMBClient {
@@ -46,8 +61,24 @@ impl SMBClient {
             state: Arc::new(Mutex::new(SMBState {
                 connected: false,
                 server: String::new(),
+                drive_letter: None,
             })),
             file_cache: Arc::new(Mutex::new(HashMap::new())),
+            drive_letter: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Build UNC path
+    fn build_unc_path(&self) -> String {
+        let base = format!(
+            "\\\\{}\\",
+            self.config.host,
+        );
+
+        if self.config.share.is_empty() {
+            base
+        } else {
+            format!("{}{}\\", base, self.config.share)
         }
     }
 
@@ -66,6 +97,235 @@ impl SMBClient {
             format!("{}{}", base, path)
         }
     }
+
+    /// Test SMB connection using net use
+    #[cfg(windows)]
+    async fn test_smb_connection(&self) -> Result<bool> {
+        let unc_path = self.build_unc_path();
+        info!("Testing SMB connection to: {}", unc_path);
+
+        // First, ping the server to check basic connectivity
+        let ping_output = Command::new("ping")
+            .args(["-n", "1", "-w", "1000", &self.config.host])
+            .output();
+
+        match ping_output {
+            Ok(output) => {
+                if !output.status.success() {
+                    warn!("Ping to {} failed", self.config.host);
+                    return Ok(false);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to run ping: {}", e);
+                return Ok(false);
+            }
+        }
+
+        // Try to access the share using net use (test without actually mounting)
+        // Use a temporary drive letter for testing
+        let test_drive = "Z:";
+
+        let mut cmd = Command::new("net");
+        let mut args = vec![
+            "use".to_string(),
+            test_drive.to_string(),
+            unc_path.clone(),
+        ];
+
+        // Add credentials if provided
+        if !self.config.username.is_empty() {
+            args.push("/user:".to_string());
+            if self.config.username.contains('\\') {
+                args.push(self.config.username.clone());
+            } else {
+                args.push(format!("{}\\
+{}", self.config.host, self.config.username));
+            }
+            if let Some(ref password) = self.config.password {
+                args.push(password.clone());
+            }
+        }
+
+        let output = cmd.args(&args).output();
+
+        match output {
+            Ok(output) => {
+                let stdout = decode_windows_output(&output.stdout);
+                let stderr = decode_windows_output(&output.stderr);
+
+                if output.status.success() {
+                    info!("SMB connection test successful");
+
+                    // Clean up the test connection
+                    let _ = Command::new("net")
+                        .args(["use", test_drive, "/delete", "/y"])
+                        .output();
+
+                    Ok(true)
+                } else {
+                    // Check for common error messages
+                    if stderr.contains("The network name cannot be found") ||
+                       stderr.contains("The specified network name is no longer available") ||
+                       stdout.contains("The network name cannot be found") {
+                        error!("Share not found or access denied: {}", unc_path);
+                        Ok(false)
+                    } else if stderr.contains("Access is denied") ||
+                              stdout.contains("Access is denied") {
+                        error!("Access denied to share: {}", unc_path);
+                        Ok(false)
+                    } else {
+                        warn!("SMB connection test failed: {} {}", stdout, stderr);
+                        Ok(false)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to run net use command: {}", e);
+                Ok(false)
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    async fn test_smb_connection(&self) -> Result<bool> {
+        // On non-Windows, just simulate connection for now
+        warn!("SMB connection test not implemented for this platform");
+        Ok(false)
+    }
+
+    /// Try to mount the SMB share using net use
+    #[cfg(windows)]
+    async fn mount_share(&self, drive: &str) -> Result<bool> {
+        let unc_path = self.build_unc_path();
+        info!("Attempting to mount SMB share to {}: {}", drive, unc_path);
+
+        // Check if drive is already in use
+        let list_output = Command::new("net")
+            .args(["use"])
+            .output();
+
+        if let Ok(output) = list_output {
+            let output_str = decode_windows_output(&output.stdout);
+            if output_str.contains(&format!("{}:", drive.trim_end_matches(':'))) {
+                info!("Drive {} is already in use", drive);
+                return Ok(false);
+            }
+        }
+
+        // Try to map the drive
+        let mut cmd = Command::new("net");
+        let mut args = vec![
+            "use".to_string(),
+            drive.to_string(),
+            unc_path.clone(),
+        ];
+
+        // Add credentials if provided
+        if !self.config.username.is_empty() {
+            args.push("/user:".to_string());
+            if self.config.username.contains('\\') {
+                args.push(self.config.username.clone());
+            } else {
+                args.push(format!("{}\\{}", self.config.host, self.config.username));
+            }
+            if let Some(ref password) = self.config.password {
+                args.push(password.clone());
+            }
+        }
+
+        // Add persistent option
+        args.push("/persistent:yes".to_string());
+
+        let output = cmd.args(&args).output()
+            .map_err(|e| Error::Connection(format!("Failed to execute net use: {}", e)))?;
+
+        let stdout = decode_windows_output(&output.stdout);
+        let stderr = decode_windows_output(&output.stderr);
+
+        if output.status.success() {
+            info!("Successfully mounted {} to {}", unc_path, drive);
+
+            // Verify the drive exists
+            if std::path::Path::new(&format!("{}\\", drive)).exists() {
+                {
+                    let mut dl = self.drive_letter.lock().await;
+                    *dl = Some(drive.to_string());
+                }
+                return Ok(true);
+            } else {
+                warn!("Drive was created but path doesn't exist yet");
+                // Give Windows a moment to finish the connection
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                if std::path::Path::new(&format!("{}\\", drive)).exists() {
+                    let mut dl = self.drive_letter.lock().await;
+                    *dl = Some(drive.to_string());
+                    return Ok(true);
+                }
+            }
+        }
+
+        // Provide detailed error message
+        let error_msg = if stderr.contains("The network name cannot be found") ||
+                         stdout.contains("The network name cannot be found") {
+            format!("无法访问共享 '{}'，请检查服务器地址和共享名称是否正确", self.config.share)
+        } else if stderr.contains("Access is denied") ||
+                  stdout.contains("Access is denied") {
+            "访问被拒绝，请检查用户名和密码是否正确".to_string()
+        } else if stderr.contains("The user name or password is incorrect") ||
+                  stdout.contains("The user name or password is incorrect") {
+            "用户名或密码错误".to_string()
+        } else if stderr.contains("System error 53") ||
+                  stdout.contains("System error 53") {
+            format!("无法找到网络路径 '{}'，请检查服务器 '{}' 是否可达", unc_path, self.config.host)
+        } else if stderr.contains("System error 67") ||
+                  stdout.contains("System error 67") {
+            "无法找到网络名称，请检查网络连接".to_string()
+        } else if stderr.contains("System error 85") ||
+                  stdout.contains("System error 85") {
+            "本地设备名已被使用，请选择其他盘符".to_string()
+        } else {
+            format!("挂载失败: {} {}", stdout.trim(), stderr.trim())
+        };
+
+        error!("Mount failed: {}", error_msg);
+        Err(Error::Connection(error_msg))
+    }
+
+    #[cfg(not(windows))]
+    async fn mount_share(&self, _drive: &str) -> Result<bool> {
+        warn!("SMB mount not implemented for this platform");
+        Ok(false)
+    }
+
+    /// Unmount the SMB share
+    #[cfg(windows)]
+    async fn unmount_share(&self, drive: &str) -> Result<bool> {
+        info!("Unmounting SMB share from {}", drive);
+
+        let output = Command::new("net")
+            .args(["use", drive, "/delete", "/y"])
+            .output()
+            .map_err(|e| Error::Connection(format!("Failed to execute net use: {}", e)))?;
+
+        if output.status.success() {
+            info!("Successfully unmounted {}", drive);
+            let mut dl = self.drive_letter.lock().await;
+            *dl = None;
+            Ok(true)
+        } else {
+            let stdout = decode_windows_output(&output.stdout);
+            let stderr = decode_windows_output(&output.stderr);
+            warn!("Unmount failed: {} {}", stdout, stderr);
+            Ok(false)
+        }
+    }
+
+    #[cfg(not(windows))]
+    async fn unmount_share(&self, _drive: &str) -> Result<bool> {
+        warn!("SMB unmount not implemented for this platform");
+        Ok(false)
+    }
 }
 
 #[async_trait]
@@ -73,16 +333,10 @@ impl Protocol for SMBClient {
     async fn connect(&mut self) -> Result<()> {
         debug!("Connecting to SMB server: {}:{}", self.config.host, self.config.port);
 
-        // Note: Actual SMB implementation would use the smb2 crate or similar
-        // For now, we simulate a connection
-
-        // In production, use something like:
-        // let session = smb2::Session::connect(
-        //     &self.config.host,
-        //     self.config.port,
-        //     &self.config.username,
-        //     self.config.password.as_deref().unwrap_or(""),
-        // ).await.map_err(|e| Error::Connection(e.to_string()))?;
+        // Test the connection first
+        if !self.test_smb_connection().await? {
+            return Err(Error::Connection("无法连接到 SMB 服务器".to_string()));
+        }
 
         let mut state = self.state.lock().await;
         state.connected = true;
@@ -263,4 +517,18 @@ pub fn create_smb_client(
     };
 
     Ok(SMBClient::new(config))
+}
+
+/// Mount an SMB share to a local drive letter
+pub async fn mount_smb_share(
+    host: &str,
+    port: u16,
+    share: &str,
+    path: &str,
+    username: &str,
+    password: Option<&str>,
+    drive: &str,
+) -> Result<bool> {
+    let client = create_smb_client(host, port, share, path, username, password)?;
+    client.mount_share(drive).await
 }
