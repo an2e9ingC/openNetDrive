@@ -35,3 +35,6 @@ keyring = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# 编码处理 (Windows GBK)
+encoding_rs = "0.8"
