@@ -370,7 +370,51 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
 async fn unmount_connection(id: String) -> Result<(), String> {
     info!("Unmounting connection: {}", id);
 
-    {
+    // 先查找连接信息
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let conn = config.connections.iter().find(|c| c.id == id);
+
+    if let Some(conn) = conn {
+        // 如果是 SMB 类型，使用 net use 断开
+        if let ConnectionType::SMB { .. } = &conn.connection_type {
+            if let Some(ref mount_point) = conn.mount_point {
+                let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
+                let drive_with_colon = format!("{}:", drive);
+
+                info!("Unmounting SMB drive: {}", drive_with_colon);
+
+                let output = std::process::Command::new("net")
+                    .args(["use", &drive_with_colon, "/delete", "/y"])
+                    .output()
+                    .map_err(|e| format!("Failed to execute net use: {}", e))?;
+
+                if !output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    // 如果已经断开，返回成功
+                    if stdout.contains("The network connection could not be found") ||
+                       stderr.contains("The network connection could not be found") ||
+                       stdout.contains("找不到网络连接") {
+                        info!("SMB drive {} already unmounted", drive_with_colon);
+                    } else {
+                        warn!("Failed to unmount SMB: {} {}", stdout, stderr);
+                    }
+                } else {
+                    info!("Successfully unmounted SMB drive {}", drive_with_colon);
+                }
+            }
+        } else {
+            // WebDAV 使用 WinFspDriver
+            let mut drivers = MOUNT_STATE.drivers.write().await;
+            if let Some(mut driver) = drivers.remove(&id) {
+                driver.stop().await
+                    .map_err(|e| format!("Failed to stop mount: {}", e))?;
+            } else {
+                return Err("Connection not mounted".to_string());
+            }
+        }
+    } else {
+        // 如果找不到连接，尝试从 drivers 中查找
         let mut drivers = MOUNT_STATE.drivers.write().await;
         if let Some(mut driver) = drivers.remove(&id) {
             driver.stop().await
