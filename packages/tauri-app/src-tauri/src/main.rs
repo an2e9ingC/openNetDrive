@@ -53,7 +53,7 @@ pub struct MountResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
-    pub dark_mode: bool,
+    pub theme_mode: String,  // "dark", "light", "system"
     pub start_minimized: bool,
     pub auto_start: bool,
     pub log_level: String,
@@ -62,7 +62,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            dark_mode: false,
+            theme_mode: "system".to_string(),
             start_minimized: false,
             auto_start: false,
             log_level: "info".to_string(),
@@ -773,7 +773,7 @@ fn get_settings() -> Result<AppSettings, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
 
     Ok(AppSettings {
-        dark_mode: config.dark_mode,
+        theme_mode: config.theme_mode,
         start_minimized: false,
         auto_start: config.start_on_boot,
         log_level: config.log_level,
@@ -784,7 +784,7 @@ fn get_settings() -> Result<AppSettings, String> {
 fn save_settings(settings: AppSettings) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
-    config.dark_mode = settings.dark_mode;
+    config.theme_mode = settings.theme_mode;
     config.start_on_boot = settings.auto_start;
     config.log_level = settings.log_level;
 

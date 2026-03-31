@@ -4,7 +4,8 @@
   box-sizing: border-box;
 }
 
-:root {
+/* 深色主题（默认） */
+:root, [data-theme="dark"] {
   --bg-primary: #1a1a2e;
   --bg-secondary: #16213e;
   --bg-card: #1f2940;
@@ -15,6 +16,20 @@
   --success: #4caf50;
   --danger: #f44336;
   --border: #333;
+}
+
+/* 浅色主题 */
+[data-theme="light"] {
+  --bg-primary: #f5f7fa;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --text-primary: #333;
+  --text-secondary: #666;
+  --accent: #1890ff;
+  --accent-hover: #40a9ff;
+  --success: #52c41a;
+  --danger: #ff4d4f;
+  --border: #d9d9d9;
 }
 
 body {
@@ -144,6 +159,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 300px;  /* 保证至少显示3个连接 */
 }
 
 .connection-card {

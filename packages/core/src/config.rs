@@ -46,7 +46,7 @@ pub struct ConnectionConfig {
 pub struct Config {
     pub connections: Vec<ConnectionConfig>,
     #[serde(default)]
-    pub dark_mode: bool,
+    pub theme_mode: String,  // "dark", "light", "system"
     #[serde(default)]
     pub start_on_boot: bool,
     #[serde(default)]

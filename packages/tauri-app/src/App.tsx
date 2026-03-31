@@ -21,7 +21,7 @@ interface Toast {
 }
 
 interface AppSettings {
-  dark_mode: boolean;
+  theme_mode: string;
   start_minimized: boolean;
   auto_start: boolean;
   log_level: string;
@@ -48,8 +48,11 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
+  // 加载设置并检测系统主题
   useEffect(() => {
     loadConnections();
+    loadSettings();
+
     // 监听后端日志事件
     const unlisten = listen<{ level: string; message: string }>('log-event', (event) => {
       const now = new Date();
@@ -61,6 +64,31 @@ function App() {
       unlisten.then(fn => fn());
     };
   }, []);
+
+  // 加载设置
+  const loadSettings = async () => {
+    try {
+      const settings = await invoke<AppSettings>('get_settings');
+      applyTheme(settings.theme_mode);
+    } catch (error) {
+      console.error('Failed to load settings:', error);
+      applyTheme('system');
+    }
+  };
+
+  // 根据主题设置应用主题
+  const applyTheme = (mode: string) => {
+    let isDark: boolean;
+    if (mode === 'dark') {
+      isDark = true;
+    } else if (mode === 'light') {
+      isDark = false;
+    } else {
+      // system
+      isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  };
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -280,6 +308,7 @@ function App() {
           onSaved={() => {
             setShowSettingsModal(false);
             setToast({ message: '设置已保存', type: 'success' });
+            loadSettings();  // 重新加载设置并应用主题
           }}
         />
       )}
@@ -309,6 +338,18 @@ function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, 
     getHostInfo().then(setHostInfo);
   }, [connection.id, getHostInfo]);
 
+  // 根据名称计算推荐的盘符
+  const getSuggestedDrive = (name: string): string | null => {
+    if (!name || name.trim() === '') return null;
+    const firstChar = name.trim().charAt(0).toUpperCase();
+    if (firstChar >= 'A' && firstChar <= 'Z') {
+      return firstChar + ':';
+    }
+    return null;
+  };
+
+  const suggestedDrive = getSuggestedDrive(connection.name);
+
   return (
     <div className="connection-card">
       <div className="connection-info">
@@ -327,7 +368,7 @@ function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, 
               connection.mount_point ? (
                 <span className="meta-drive" style={{ color: '#fbbf24' }}>将挂载到: {connection.mount_point}</span>
               ) : (
-                <span className="meta-unmounted">自动分配盘符</span>
+                <span className="meta-drive" style={{ color: '#fbbf24' }}>自动: {suggestedDrive || 'Z:'}</span>
               )
             )}
             {connection.auto_mount && <span className="meta-auto">自动</span>}
@@ -410,6 +451,19 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
     }
   }, [type]);
 
+  // 根据名称计算推荐的盘符
+  const getSuggestedDrive = (connectionName: string, availableDrives: string[]): string | null => {
+    if (!connectionName || connectionName.trim() === '') return null;
+    const firstChar = connectionName.trim().charAt(0).toUpperCase();
+    if (firstChar >= 'A' && firstChar <= 'Z') {
+      const drive = firstChar + ':';
+      if (availableDrives.includes(drive)) {
+        return drive;
+      }
+    }
+    return null;
+  };
+
   const loadAvailableDrives = async () => {
     try {
       const drives = await invoke<string[]>('get_available_drives');
@@ -464,12 +518,24 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             />
           </div>
 
-          <div className="form-group">
-            <label>协议类型</label>
-            <select value={type} onChange={(e) => setType(e.target.value)}>
-              <option value="webdav">WebDAV</option>
-              <option value="smb">SMB/CIFS (Windows文件共享)</option>
-            </select>
+          {/* 协议类型和挂载盘符在同一行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>协议类型</label>
+              <select value={type} onChange={(e) => setType(e.target.value)}>
+                <option value="webdav">WebDAV</option>
+                <option value="smb">SMB/CIFS (Windows文件共享)</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>挂载盘符</label>
+              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+                <option value="">自动选择 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
+                {availableDrives.map(drive => (
+                  <option key={drive} value={drive}>{drive} (可用)</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {type === 'smb' ? (
@@ -538,16 +604,6 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             </div>
           )}
 
-          <div className="form-group">
-            <label>挂载盘符</label>
-            <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-              <option value="">自动选择</option>
-              {availableDrives.map(drive => (
-                <option key={drive} value={drive}>{drive} (可用)</option>
-              ))}
-            </select>
-          </div>
-
           {/* 用户名密码在同一行 */}
           <div className="form-row">
             <div className="form-group">
@@ -614,6 +670,19 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
+  // 根据名称计算推荐的盘符
+  const getSuggestedDrive = (connectionName: string, drives: string[]): string | null => {
+    if (!connectionName || connectionName.trim() === '') return null;
+    const firstChar = connectionName.trim().charAt(0).toUpperCase();
+    if (firstChar >= 'A' && firstChar <= 'Z') {
+      const drive = firstChar + ':';
+      if (drives.includes(drive)) {
+        return drive;
+      }
+    }
+    return null;
+  };
+
   useEffect(() => {
     loadAvailableDrives();
   }, []);
@@ -668,12 +737,27 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             />
           </div>
 
-          <div className="form-group">
-            <label>协议类型</label>
-            <select value={type} onChange={(e) => setType(e.target.value)}>
-              <option value="webdav">WebDAV</option>
-              <option value="smb">SMB/CIFS (Windows文件共享)</option>
-            </select>
+          {/* 协议类型和挂载盘符在同一行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>协议类型</label>
+              <select value={type} onChange={(e) => setType(e.target.value)}>
+                <option value="webdav">WebDAV</option>
+                <option value="smb">SMB/CIFS (Windows文件共享)</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>挂载盘符</label>
+              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+                <option value="">自动选择 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
+                {availableDrives.map(drive => (
+                  <option key={drive} value={drive}>{drive} (可用)</option>
+                ))}
+                {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
+                  <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
+                )}
+              </select>
+            </div>
           </div>
 
           {type === 'smb' ? (
@@ -744,19 +828,6 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </div>
           </div>
 
-          <div className="form-group">
-            <label>挂载盘符</label>
-            <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-              <option value="">自动选择</option>
-              {availableDrives.map(drive => (
-                <option key={drive} value={drive}>{drive} (可用)</option>
-              ))}
-              {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
-                <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
-              )}
-            </select>
-          </div>
-
           <div className="form-group checkbox-group">
             <label className="checkbox-label">
               <input
@@ -788,7 +859,7 @@ interface SettingsModalProps {
 }
 
 function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
-  const [darkMode, setDarkMode] = useState(false);
+  const [themeMode, setThemeMode] = useState('system');
   const [autoStart, setAutoStart] = useState(false);
   const [logLevel, setLogLevel] = useState('info');
   const [submitting, setSubmitting] = useState(false);
@@ -800,7 +871,7 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
   const loadSettings = async () => {
     try {
       const settings = await invoke<AppSettings>('get_settings');
-      setDarkMode(settings.dark_mode);
+      setThemeMode(settings.theme_mode || 'system');
       setAutoStart(settings.auto_start);
       setLogLevel(settings.log_level);
     } catch (error) {
@@ -815,7 +886,7 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
     try {
       await invoke('save_settings', {
         settings: {
-          dark_mode: darkMode,
+          theme_mode: themeMode,
           start_minimized: false,
           auto_start: autoStart,
           log_level: logLevel,
@@ -835,15 +906,40 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>⚙️ 设置</h2>
         <form onSubmit={handleSubmit}>
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={darkMode}
-                onChange={(e) => setDarkMode(e.target.checked)}
-              />
-              <span>深色模式</span>
-            </label>
+          <div className="form-group">
+            <label>主题模式</label>
+            <div style={{ display: 'flex', gap: '16px', marginTop: '8px' }}>
+              <label className="checkbox-label">
+                <input
+                  type="radio"
+                  name="themeMode"
+                  value="light"
+                  checked={themeMode === 'light'}
+                  onChange={(e) => setThemeMode(e.target.value)}
+                />
+                <span>浅色</span>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="radio"
+                  name="themeMode"
+                  value="dark"
+                  checked={themeMode === 'dark'}
+                  onChange={(e) => setThemeMode(e.target.value)}
+                />
+                <span>深色</span>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="radio"
+                  name="themeMode"
+                  value="system"
+                  checked={themeMode === 'system'}
+                  onChange={(e) => setThemeMode(e.target.value)}
+                />
+                <span>跟随系统</span>
+              </label>
+            </div>
           </div>
 
           <div className="form-group checkbox-group">

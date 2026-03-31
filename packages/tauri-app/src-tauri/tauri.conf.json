@@ -15,12 +15,12 @@
       {
         "title": "openNetDrive - 网络驱动器挂载工具",
         "width": 900,
-        "height": 650,
+        "height": 750,
         "resizable": true,
         "fullscreen": false,
         "center": true,
         "minWidth": 600,
-        "minHeight": 400
+        "minHeight": 550
       }
     ],
     "security": {
