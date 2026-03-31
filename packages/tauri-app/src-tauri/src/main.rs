@@ -10,7 +10,7 @@ use log::{info, error, warn};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 
 // Global mount state
@@ -206,10 +206,14 @@ fn remove_connection(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn mount_connection(id: String) -> Result<MountResult, String> {
+async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<MountResult, String> {
     info!("Mounting connection: {}", id);
+    let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("开始挂载连接: {}", id)}));
 
-    let config = Config::load().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| {
+        let _ = app_handle.emit("log-event", serde_json::json!({"level": "error", "message": format!("加载配置失败: {}", e)}));
+        e.to_string()
+    })?;
 
     let conn = config.connections.iter()
         .find(|c| c.id == id)
@@ -246,14 +250,26 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
         if !std::path::Path::new(&path).exists() {
             mp.clone()
         } else {
-            find_available_drive().unwrap_or_else(|| "X:".to_string())
+            find_available_drive(&conn.name).unwrap_or_else(|| "X:".to_string())
         }
     } else {
-        find_available_drive().unwrap_or_else(|| "X:".to_string())
+        find_available_drive(&conn.name).unwrap_or_else(|| "X:".to_string())
     };
 
     // SMB 协议使用 net use 直接挂载
     if let ConnectionType::SMB { host, port, share, path, username, .. } = &conn.connection_type {
+        // 检查凭据是否完整
+        let has_username = !username.is_empty();
+        let has_password = password.is_some() && !password.as_ref().unwrap().is_empty();
+
+        if !has_username || !has_password {
+            return Ok(MountResult {
+                success: false,
+                mount_point: None,
+                message: "请先编辑连接，填写用户名和密码后再挂载".to_string(),
+            });
+        }
+
         info!("Mounting SMB share: \\{}{}\\{}", host, share, path);
 
         // 使用 net use 直接挂载
@@ -286,6 +302,7 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
                 config.save().map_err(|e| e.to_string())?;
 
                 info!("Successfully mounted SMB {} to {}", conn.name, mount_point);
+                let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("SMB 挂载成功: {} -> {}", conn.name, mount_point)}));
 
                 Ok(MountResult {
                     success: true,
@@ -294,6 +311,7 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
                 })
             }
             Ok(false) => {
+                let _ = app_handle.emit("log-event", serde_json::json!({"level": "error", "message": "SMB 服务器连接失败"}));
                 Ok(MountResult {
                     success: false,
                     mount_point: None,
@@ -303,6 +321,7 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
             Err(e) => {
                 let error_msg = format!("{}", e);
                 error!("Failed to mount SMB: {}", error_msg);
+                let _ = app_handle.emit("log-event", serde_json::json!({"level": "error", "message": format!("SMB 挂载失败: {}", error_msg)}));
                 Ok(MountResult {
                     success: false,
                     mount_point: None,
@@ -367,8 +386,9 @@ async fn mount_connection(id: String) -> Result<MountResult, String> {
 }
 
 #[tauri::command]
-async fn unmount_connection(id: String) -> Result<(), String> {
+async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<(), String> {
     info!("Unmounting connection: {}", id);
+    let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("开始断开连接: {}", id)}));
 
     // 先查找连接信息
     let config_result = Config::load();
@@ -430,11 +450,11 @@ async fn unmount_connection(id: String) -> Result<(), String> {
             }
         }
 
-        // 更新配置
+        // 更新配置 - 只更新 enabled 状态，保留 mount_point
         let mut config = config;
         if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
             c.enabled = false;
-            c.mount_point = None;
+            // 不再清空 mount_point，保留用户配置的盘符
             let _ = config.save();
             info!("Updated config for {}", id);
         }
@@ -452,6 +472,7 @@ async fn unmount_connection(id: String) -> Result<(), String> {
 
     if unmounted {
         info!("Successfully unmounted {}", id);
+        let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("已成功断开: {}", id)}));
         Ok(())
     } else {
         // 即使没有成功断开，也不报错，因为可能已经断开了
@@ -522,6 +543,118 @@ fn get_mounted_drives() -> Result<Vec<MountedDrive>, String> {
     Ok(drives)
 }
 
+/// Scan existing SMB connections from system and auto-import to config
+#[tauri::command]
+fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
+    info!("Syncing existing SMB connections from system...");
+
+    // Get current mounted drives from system
+    let output = std::process::Command::new("net")
+        .args(["use"])
+        .output()
+        .map_err(|e| format!("Failed to get net use list: {}", e))?;
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let mut added_count = 0;
+
+    // Parse output and find SMB connections
+    for line in output_str.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Check if it's a drive line (starts with letter colon)
+        if line.len() >= 2 && line.chars().nth(1) == Some(':') {
+            let drive = line[0..2].to_string();
+            let rest = line[3..].trim();
+
+            // Extract remote path (UNC path)
+            if rest.starts_with("\\\\") {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let unc_path = parts[0];
+                // Parse UNC path: \\server\share[\path]
+                let unc_parts: Vec<&str> = unc_path.split('\\').filter(|s| !s.is_empty()).collect();
+
+                if unc_parts.len() >= 2 {
+                    let server = unc_parts[0];
+                    let share = unc_parts[1];
+
+                    // Check if this connection already exists in config
+                    let exists = config.connections.iter().any(|c| {
+                        if let ConnectionType::SMB { host, share: s, .. } = &c.connection_type {
+                            host == server && s == share
+                        } else {
+                            false
+                        }
+                    });
+
+                    if !exists {
+                        // Create new connection
+                        let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+                        let name = format!("{} ({})", share, server);
+
+                        let conn = ConnectionConfig {
+                            id: id.clone(),
+                            name,
+                            connection_type: ConnectionType::SMB {
+                                host: server.to_string(),
+                                port: 445,
+                                share: share.to_string(),
+                                path: String::new(),
+                                username: String::new(),
+                                password: None,
+                            },
+                            mount_point: Some(drive.clone()),
+                            auto_mount: false,
+                            enabled: true,
+                        };
+
+                        config.connections.push(conn);
+                        added_count += 1;
+                        info!("Auto-added SMB connection: {} -> \\\\{}\\{}", drive, server, share);
+                    }
+                }
+            }
+        }
+    }
+
+    // Save config if we added new connections
+    if added_count > 0 {
+        config.save().map_err(|e| e.to_string())?;
+        info!("Added {} new SMB connections to config", added_count);
+    }
+
+    // Return updated connection list
+    let connections = config.connections.iter().map(|c| {
+        let (connection_type, host, username, share, remote_path) = match &c.connection_type {
+            ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
+            ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
+        };
+
+        ConnectionInfo {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            connection_type,
+            mount_point: c.mount_point.clone(),
+            auto_mount: c.auto_mount,
+            enabled: c.enabled,
+            host,
+            username,
+            share,
+            remote_path,
+        }
+    }).collect();
+
+    Ok(connections)
+}
+
 #[tauri::command]
 fn update_connection(
     id: String,
@@ -583,14 +716,15 @@ fn update_connection(
 }
 
 #[tauri::command]
-async fn auto_mount_connections() -> Result<Vec<MountResult>, String> {
+async fn auto_mount_connections(app_handle: tauri::AppHandle) -> Result<Vec<MountResult>, String> {
     info!("Auto mounting connections...");
+    let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": "开始自动挂载连接..."}));
 
     let config = Config::load().map_err(|e| e.to_string())?;
     let mut results = Vec::new();
 
     for conn in config.connections.iter().filter(|c| c.auto_mount && !c.enabled) {
-        let result = match mount_connection(conn.id.clone()).await {
+        let result = match mount_connection(conn.id.clone(), app_handle.clone()).await {
             Ok(r) => r,
             Err(e) => MountResult {
                 success: false,
@@ -660,7 +794,7 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
     Ok(())
 }
 
-fn find_available_drive() -> Option<String> {
+fn find_available_drive(name: &str) -> Option<String> {
     // 获取已被系统占用的盘符
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for letter in b'A'..=b'Z' {
@@ -668,6 +802,17 @@ fn find_available_drive() -> Option<String> {
         let path = format!("{}\\", drive);
         if std::path::Path::new(&path).exists() {
             used.insert(drive);
+        }
+    }
+
+    // 优先尝试使用名称的首字母作为盘符
+    if !name.is_empty() {
+        let first_char = name.chars().next().unwrap_or('A').to_ascii_uppercase();
+        if first_char.is_ascii_alphabetic() {
+            let drive = format!("{}:", first_char);
+            if !used.contains(&drive) {
+                return Some(drive);
+            }
         }
     }
 
@@ -837,12 +982,13 @@ fn update_connection_full(
     }
 }
 
-async fn init_auto_mount() {
+async fn init_auto_mount(app_handle: tauri::AppHandle) {
     if let Ok(config) = Config::load() {
         for conn in config.connections.iter().filter(|c| c.auto_mount && !c.enabled) {
             info!("Auto-mounting connection: {} ({})", conn.name, conn.id);
+            let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("自动挂载: {}", conn.name)}));
 
-            match mount_connection(conn.id.clone()).await {
+            match mount_connection(conn.id.clone(), app_handle.clone()).await {
                 Ok(result) => {
                     if result.success {
                         info!("Auto-mounted {} at {}", conn.name, result.mount_point.unwrap_or_default());
@@ -868,16 +1014,18 @@ fn main() {
 
     info!("Starting openNetDrive...");
 
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    runtime.block_on(async {
-        init_auto_mount().await;
-    });
-
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             info!("Setting up application...");
+
+            // 自动挂载之前保存的连接
+            let app_handle = app.handle().clone();
+            let runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            runtime.spawn(async move {
+                init_auto_mount(app_handle).await;
+            });
 
             // Create system tray menu
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -954,7 +1102,8 @@ fn main() {
             get_available_drives,
             open_folder,
             get_connection_host_info,
-            get_mounted_drives
+            get_mounted_drives,
+            sync_existing_connections
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

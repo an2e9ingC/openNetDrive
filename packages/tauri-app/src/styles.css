@@ -258,7 +258,7 @@ body {
 }
 
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .form-group label {
@@ -411,7 +411,7 @@ body {
 .log-panel {
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
-  max-height: 200px;
+  max-height: 300px;
   overflow: hidden;
   display: flex;
   flex-direction: column;

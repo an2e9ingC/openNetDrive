@@ -86,6 +86,9 @@ function App() {
   const loadConnections = async () => {
     setLoading(true);
     try {
+      // First sync existing SMB connections from system to config
+      await invoke<Connection[]>('sync_existing_connections');
+      // Then get the updated connection list
       const conns = await invoke<Connection[]>('get_connections');
       setConnections(conns);
     } catch (error) {
@@ -316,15 +319,27 @@ function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, 
           <h3>{connection.name}</h3>
           <p className="connection-meta">
             <span className="meta-type">{connection.connection_type === 'webdav' ? 'WebDAV' : 'SMB'}</span>
-            {connection.mount_point && (
-              <span className="meta-drive">本地: {connection.mount_point}</span>
+            {connection.enabled ? (
+              connection.mount_point && (
+                <span className="meta-drive" style={{ color: '#4ade80' }}>本地: {connection.mount_point}</span>
+              )
+            ) : (
+              connection.mount_point ? (
+                <span className="meta-drive" style={{ color: '#fbbf24' }}>将挂载到: {connection.mount_point}</span>
+              ) : (
+                <span className="meta-unmounted">自动分配盘符</span>
+              )
             )}
-            {!connection.mount_point && <span className="meta-unmounted">未挂载</span>}
             {connection.auto_mount && <span className="meta-auto">自动</span>}
           </p>
           <p className="connection-host">
             远端: {hostInfo || connection.host || '-'}
           </p>
+          {connection.username && (
+            <p className="connection-username" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              用户名: {connection.username}
+            </p>
+          )}
         </div>
       </div>
       <div className="connection-actions">
@@ -592,6 +607,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [host, setHost] = useState(connection.host || '');
   const [share, setShare] = useState(connection.share || '');         // SMB 共享名称
   const [remotePath, setRemotePath] = useState(connection.remote_path || '/'); // SMB 远程路径
+  const [username, setUsername] = useState(connection.username || '');
   const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
   const [password, setPassword] = useState('');
@@ -623,7 +639,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
         host,
         share: share || null,
         remotePath: remotePath || null,
-        username: connection.username || '',
+        username: username,
         password: password || null,
         mountPoint: mountPoint || null,
         autoMount,
@@ -692,23 +708,6 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
                   onChange={(e) => setRemotePath(e.target.value)}
                   placeholder="例: /documents 或 /"
                 />
-                {/* 实时显示 UNC 路径预览 */}
-                {type === 'smb' && host && (
-                  <div style={{
-                    marginTop: '8px',
-                    padding: '8px 12px',
-                    background: 'var(--bg-primary)',
-                    borderRadius: '4px',
-                    fontSize: '0.8rem',
-                    fontFamily: 'monospace',
-                    color: share ? 'var(--accent)' : 'var(--text-secondary)'
-                  }}>
-                    📍 预览: {share ? (() => {
-                      const cleanPath = remotePath.replace(/^\/+/, '').replace(/\//g, '\\');
-                      return cleanPath ? `\\\\${host}\\${share}\\${cleanPath}` : `\\\\${host}\\${share}`;
-                    })() : `\\\\${host}\\<共享名称>`}
-                  </div>
-                )}
               </div>
             </>
           ) : (
@@ -723,27 +722,39 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </div>
           )}
 
+          {/* 用户名和密码在同一行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>用户名 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="用户名"
+              />
+            </div>
+            <div className="form-group">
+              <label>密码 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="留空则不更改"
+              />
+            </div>
+          </div>
+
           <div className="form-group">
             <label>挂载盘符</label>
             <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
               <option value="">自动选择</option>
               {availableDrives.map(drive => (
-                <option key={drive} value={drive}>{drive}</option>
+                <option key={drive} value={drive}>{drive} (可用)</option>
               ))}
               {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
                 <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
               )}
             </select>
-          </div>
-
-          <div className="form-group">
-            <label>新密码（留空保持不变）</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="输入新密码"
-            />
           </div>
 
           <div className="form-group checkbox-group">
