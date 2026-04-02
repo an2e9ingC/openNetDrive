@@ -6,12 +6,192 @@ use opennetdrive_mount_win::WinFspDriver;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::{info, error, warn};
+use log::{info, error, warn, debug};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
+
+#[cfg(windows)]
+fn set_network_drive_label(drive_letter: &str, unc_path: &str, label: &str) -> Result<(), String> {
+    use std::process::Command;
+
+    // 解析 UNC 路径，提取 server 和 share
+    // unc_path 格式: \\server\share 或 \\server\share\subfolder
+    let unc_path_clean = unc_path.trim_end_matches('\\').trim_end_matches('/');
+    debug!("[Registry] Input UNC path: '{}', cleaned: '{}'", unc_path, unc_path_clean);
+
+    let parts: Vec<&str> = unc_path_clean.trim_start_matches("\\\\").split('\\').collect();
+
+    debug!("[Registry] Parsed parts: {:?}", parts);
+
+    if parts.len() < 2 {
+        return Err("Invalid UNC path format".to_string());
+    }
+
+    let server = parts[0];
+    let share = parts[1];
+
+    // 系统创建的键名格式: ##server#share (如 ##NAS4MrLady#home_public)
+    let server_share_key = format!("##{}#{}", server, share);
+    let reg_path = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\{}", server_share_key);
+
+    debug!("[Registry] Server: {}, Share: {}, Full key: {}", server, share, server_share_key);
+    debug!("[Registry] Setting label at: {}, label: {}", reg_path, label);
+
+    // 第一步：检查注册表键是否存在
+    let check_output = Command::new("reg")
+        .args(["query", &reg_path])
+        .output()
+        .map_err(|e| format!("Failed to query reg: {}", e))?;
+
+    if !check_output.status.success() {
+        let stderr = String::from_utf8_lossy(&check_output.stderr);
+        // 键不存在，等待一下再试（系统可能还没创建）
+        debug!("[Registry] Key not found, waiting and retrying...");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let check_output = Command::new("reg")
+            .args(["query", &reg_path])
+            .output()
+            .map_err(|e| format!("Failed to query reg: {}", e))?;
+
+        if !check_output.status.success() {
+            warn!("[Registry] Registry key does not exist: {}", server_share_key);
+            return Err(format!("Registry key does not exist: {}", server_share_key));
+        }
+    }
+
+    debug!("[Registry] Registry key exists, now setting value");
+
+    // 第二步：设置 _LabelFromDesktopINI 值
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        debug!("[Registry] Setting label, attempt {}", attempt);
+
+        let output = Command::new("reg")
+            .args(["add", &reg_path, "/v", "_LabelFromDesktopINI", "/t", "REG_SZ", "/d", label, "/f"])
+            .output()
+            .map_err(|e| format!("Failed to execute reg: {}", e))?;
+
+        if output.status.success() {
+            // 第三步：验证设置是否成功
+            debug!("[Registry] Setting success, verifying...");
+
+            let verify_output = Command::new("reg")
+                .args(["query", &reg_path, "/v", "_LabelFromDesktopINI"])
+                .output()
+                .map_err(|e| format!("Failed to verify reg: {}", e))?;
+
+            if verify_output.status.success() {
+                let stdout = String::from_utf8_lossy(&verify_output.stdout);
+                debug!("[Registry] Verify output: {}", stdout.trim());
+                if stdout.contains(label) {
+                    debug!("[Registry] Verification passed: label set to {}", label);
+                    return Ok(());
+                } else {
+                    warn!("[Registry] Verification failed: expected '{}' but output is: {}", label, stdout.trim());
+                    last_error = format!("Verification failed: expected '{}'", label);
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&verify_output.stderr);
+                warn!("[Registry] Verification failed: could not read value, stderr: {}", stderr);
+                last_error = "Verification failed: could not read value".to_string();
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            last_error = stderr.to_string();
+            warn!("[Registry] Setting failed: {}", last_error);
+        }
+
+        // 等待后重试
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+
+    Err(format!("Failed to set label after 3 attempts: {}", last_error))
+}
+
+#[cfg(windows)]
+fn clear_network_drive_label(drive_letter: &str, unc_path: &str) -> Result<(), String> {
+    use std::process::Command;
+
+    // 解析 UNC 路径
+    let unc_path_clean = unc_path.trim_end_matches('\\').trim_end_matches('/');
+    let parts: Vec<&str> = unc_path_clean.trim_start_matches("\\\\").split('\\').collect();
+
+    if parts.len() < 2 {
+        return Err("Invalid UNC path format".to_string());
+    }
+
+    let server = parts[0];
+    let share = parts[1];
+
+    // 系统创建的键名格式: ##server#share
+    let server_share_key = format!("##{}#{}", server, share);
+    let reg_path = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\{}", server_share_key);
+
+    debug!("[Registry] Deleting label at: {}", reg_path);
+
+    // 尝试删除，最多重试2次
+    for attempt in 1..=2 {
+        let output = Command::new("reg")
+            .args(["delete", &reg_path, "/f"])
+            .output()
+            .map_err(|e| format!("Failed to execute reg: {}", e))?;
+
+        if output.status.success() {
+            debug!("[Registry] Delete success, verifying...");
+
+            // 验证删除是否成功
+            let verify_output = Command::new("reg")
+                .args(["query", &reg_path])
+                .output()
+                .map_err(|e| format!("Failed to verify reg: {}", e))?;
+
+            if !verify_output.status.success() {
+                debug!("[Registry] Delete verification passed: key removed");
+                return Ok(());
+            }
+            debug!("[Registry] Delete verification: key still exists, retrying...");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("unable to find") || stderr.contains("系统找不到") || stderr.contains("The system was unable to find") {
+                debug!("[Registry] Key already deleted or not found");
+                return Ok(());
+            }
+            warn!("[Registry] Delete failed: {}", stderr);
+        }
+
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+
+    // 最后检查一次
+    let check_output = Command::new("reg")
+        .args(["query", &reg_path])
+        .output()
+        .map_err(|e| format!("Failed to check reg: {}", e))?;
+
+    if check_output.status.success() {
+        warn!("[Registry] Warning: key still exists after delete attempts");
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_network_drive_label(_drive_letter: &str, _unc_path: &str, _label: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn clear_network_drive_label(_drive_letter: &str, _unc_path: &str) -> Result<(), String> {
+    Ok(())
+}
 
 // Global mount state
 struct MountState {
@@ -184,8 +364,22 @@ async fn add_connection(
 fn remove_connection(id: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
-    // Get connection to remove credentials
+    // Get connection to remove credentials and cleanup registry
     if let Some(conn) = config.get_connection(&id) {
+        debug!("[Remove] Connection found: name={}, type={:?}", conn.name, conn.connection_type);
+
+        // 清理注册表中的驱动器标签 (如果是 SMB 连接且已挂载)
+        if let (ConnectionType::SMB { host, share, .. }, Some(ref mount_point)) = (&conn.connection_type, &conn.mount_point) {
+            let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
+            let drive_with_colon = format!("{}:", drive.to_uppercase());
+            let unc_path = format!(r"\\{}\{}", host, share);
+            debug!("[Remove] Clearing registry for drive: {}, UNC: {}", drive_with_colon, unc_path);
+            let _ = clear_network_drive_label(&drive_with_colon, &unc_path);
+            debug!("[Remove] Registry cleanup done");
+        } else {
+            debug!("[Remove] No mount_point found, skipping registry cleanup");
+        }
+
         let username = match &conn.connection_type {
             ConnectionType::WebDAV { username, .. } => username,
             ConnectionType::SMB { username, .. } => username,
@@ -198,7 +392,7 @@ fn remove_connection(id: String) -> Result<(), String> {
 
     if config.remove_connection(&id).is_some() {
         config.save().map_err(|e| e.to_string())?;
-        info!("Removed connection: {}", id);
+        debug!("[Remove] Connection removed: {}", id);
         Ok(())
     } else {
         Err("Connection not found".to_string())
@@ -291,6 +485,15 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
                         mount_point: Some(mount_point),
                         message: "挂载命令执行成功，但磁盘未生效，请检查网络连接".to_string(),
                     });
+                }
+
+                // 设置网络驱动器名称（通过注册表）- 修改系统创建的 ##server#share 键
+                let unc_path = format!(r"\\{}\{}", host, share);
+                debug!("Setting network drive label for UNC: {}, label: {}", unc_path, conn.name);
+                if let Err(e) = set_network_drive_label(&mount_point, &unc_path, &conn.name) {
+                    warn!("Failed to set network drive label: {}", e);
+                } else {
+                    debug!("Network drive label set successfully");
                 }
 
                 // 保存挂载状态
@@ -387,6 +590,7 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
 
 #[tauri::command]
 async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    debug!("[Unmount] Starting unmount for id: {}", id);
     info!("Unmounting connection: {}", id);
     let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("开始断开连接: {}", id)}));
 
@@ -403,15 +607,15 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
         .map_err(|e| format!("Failed to get net use list: {}", e))?;
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    info!("Current net use output:\n{}", output_str);
+    debug!("[Unmount] Current net use output:\n{}", output_str);
 
     // 尝试用 ID 作为驱动器号断开
     // 假设 id 可能是驱动器号如 "Z" 或完整名称
-    let drive_letters = ['Z', 'Y', 'X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M', 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A'];
 
     // 如果 ID 看起来像驱动器号，尝试断开它
     if id.len() == 1 && id.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
         let drive_with_colon = format!("{}:", id.to_uppercase());
+        debug!("[Unmount] ID looks like drive letter: {}", drive_with_colon);
         info!("Trying to unmount drive: {}", drive_with_colon);
 
         let output = std::process::Command::new("net")
@@ -420,22 +624,38 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
             .map_err(|e| format!("Failed to execute net use: {}", e))?;
 
         if output.status.success() {
+            debug!("[Unmount] Successfully unmounted drive via net use");
             info!("Successfully unmounted drive {}", drive_with_colon);
             unmounted = true;
         } else {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!("[Unmount] net use failed: stdout={}, stderr={}", stdout, stderr);
             info!("net use result: {} {}", stdout, stderr);
         }
     } else if let Ok(config) = config_result {
         // 从配置中查找连接
         if let Some(conn) = config.connections.iter().find(|c| c.id == id) {
+            debug!("[Unmount] Found connection in config: name={}, type={:?}, mount_point={:?}", conn.name, conn.connection_type, conn.mount_point);
             info!("Found connection in config: {} mount_point: {:?}", conn.name, conn.mount_point);
+
+            // 保存驱动器号和UNC路径供后续使用（在更新配置之前）
+            let drive_to_clear: Option<(String, String)> = if let (ConnectionType::SMB { host, share, .. }, Some(ref mount_point)) = (&conn.connection_type, &conn.mount_point) {
+                let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
+                let drive_str = format!("{}:", drive.to_uppercase());
+                let unc_path = format!(r"\\{}\{}", host, share);
+                debug!("[Unmount] Will clear registry for drive: {}, UNC: {}", drive_str, unc_path);
+                Some((drive_str, unc_path))
+            } else {
+                debug!("[Unmount] Not SMB or no mount_point, skipping registry clear");
+                None
+            };
 
             if let Some(ref mount_point) = conn.mount_point {
                 let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
                 let drive_with_colon = format!("{}:", drive.to_uppercase());
 
+                debug!("[Unmount] Attempting to unmount drive: {}", drive_with_colon);
                 info!("Trying to unmount: {}", drive_with_colon);
 
                 let output = std::process::Command::new("net")
@@ -444,8 +664,16 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
                     .map_err(|e| format!("Failed to execute net use: {}", e))?;
 
                 if output.status.success() {
+                    debug!("[Unmount] net use success, now clearing registry");
                     info!("Successfully unmounted drive {}", drive_with_colon);
                     unmounted = true;
+
+                    // 清理注册表中的驱动器标签（在更新配置之前）
+                    if let Some((ref drive, ref unc_path)) = drive_to_clear {
+                        debug!("[Unmount] Calling clear_network_drive_label for: {}, UNC: {}", drive, unc_path);
+                        let _ = clear_network_drive_label(drive, unc_path);
+                        debug!("[Unmount] clear_network_drive_label returned");
+                    }
                 }
             }
         }
@@ -1008,7 +1236,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("opennetdrive=info".parse().unwrap())
+                .add_directive("opennetdrive=debug".parse().unwrap())
         )
         .init();
 
