@@ -315,6 +315,7 @@ async fn add_connection(
     username: String,
     password: Option<String>,
     auto_mount: Option<bool>,
+    mount_point: Option<String>,
 ) -> Result<String, String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
@@ -349,7 +350,7 @@ async fn add_connection(
         id: id.clone(),
         name,
         connection_type: conn_type,
-        mount_point: None,
+        mount_point,
         auto_mount: auto_mount.unwrap_or(false),
         enabled: false,
     };
@@ -1244,7 +1245,13 @@ fn update_connection_full(
     if let Some(conn) = config.connections.iter_mut().find(|c| c.id == id) {
         // 更新密码
         if let Some(ref pwd) = password {
-            if !pwd.is_empty() {
+            if pwd == "**REMOVE_PASSWORD**" {
+                // 删除保存的密码
+                if let Ok(cred_manager) = CredentialManager::new() {
+                    let _ = cred_manager.delete_for_connection(&id, &username);
+                }
+            } else if !pwd.is_empty() {
+                // 保存新密码
                 if let Ok(cred_manager) = CredentialManager::new() {
                     let _ = cred_manager.store_for_connection(&id, &username, pwd);
                 }

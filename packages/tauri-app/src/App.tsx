@@ -436,6 +436,7 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
   const [password, setPassword] = useState('');
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [autoMount, setAutoMount] = useState(false);
+  const [savePassword, setSavePassword] = useState(true);
   const [mountPoint, setMountPoint] = useState('');  // 空字符串表示自动分配
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -517,8 +518,8 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
       const drives = await invoke<string[]>('get_available_drives');
       setAvailableDrives(drives);
       if (drives.length > 0) {
-        // 选择第一个未使用的盘符后面的字母
-        setMountPoint(drives[drives.length - 1] || 'Z:');
+        // 选择第一个可用盘符作为默认
+        setMountPoint(drives[0] || 'Z:');
       }
     } catch (e) {
       console.error('Failed to get drives:', e);
@@ -544,7 +545,7 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
         share: share || null,
         remotePath: remotePath || null,
         username,
-        password,
+        password: savePassword ? password : null,
         autoMount,
         mountPoint: mountPoint || null,
       });
@@ -562,25 +563,17 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>➕ 添加连接</h2>
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>名称</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：我的 NAS"
-              required
-            />
-          </div>
-
-          {/* 协议类型和挂载盘符在同一行 */}
+          {/* 名称和挂载盘符在同一行 */}
           <div className="form-row">
             <div className="form-group">
-              <label>协议类型</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="webdav">WebDAV</option>
-                <option value="smb">SMB/CIFS (Windows文件共享)</option>
-              </select>
+              <label>名称</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：我的 NAS"
+                required
+              />
             </div>
             <div className="form-group">
               <label>挂载盘符</label>
@@ -591,6 +584,15 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* 协议类型单独一行 */}
+          <div className="form-group">
+            <label>协议类型</label>
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              <option value="webdav">WebDAV</option>
+              <option value="smb">SMB/CIFS (Windows文件共享)</option>
+            </select>
           </div>
 
           {type === 'smb' ? (
@@ -699,15 +701,27 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             </div>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={autoMount}
-                onChange={(e) => setAutoMount(e.target.checked)}
-              />
-              <span>启动时自动挂载</span>
-            </label>
+          <div className="form-row" style={{ alignItems: 'center' }}>
+            <div className="checkbox-group" style={{ flex: 1 }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={savePassword}
+                  onChange={(e) => setSavePassword(e.target.checked)}
+                />
+                <span>保存密码</span>
+              </label>
+            </div>
+            <div className="checkbox-group" style={{ flex: 1 }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={autoMount}
+                  onChange={(e) => setAutoMount(e.target.checked)}
+                />
+                <span>启动时自动挂载</span>
+              </label>
+            </div>
           </div>
 
           <div className="modal-actions">
@@ -739,6 +753,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [username, setUsername] = useState(connection.username || '');
   const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
+  const [removePassword, setRemovePassword] = useState(false);
   const [password, setPassword] = useState('');
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
@@ -845,7 +860,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
         share: share || null,
         remotePath: remotePath || null,
         username: username,
-        password: password || null,
+        password: password ? password : (removePassword ? '**REMOVE_PASSWORD**' : null),
         mountPoint: mountPoint || null,
         autoMount,
       });
@@ -863,24 +878,16 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>✏️ 编辑连接</h2>
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>名称</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-
-          {/* 协议类型和挂载盘符在同一行 */}
+          {/* 名称和挂载盘符在同一行 */}
           <div className="form-row">
             <div className="form-group">
-              <label>协议类型</label>
-              <select value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="webdav">WebDAV</option>
-                <option value="smb">SMB/CIFS (Windows文件共享)</option>
-              </select>
+              <label>名称</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
             </div>
             <div className="form-group">
               <label>挂载盘符</label>
@@ -894,6 +901,15 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
                 )}
               </select>
             </div>
+          </div>
+
+          {/* 协议类型单独一行 */}
+          <div className="form-group">
+            <label>协议类型</label>
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              <option value="webdav">WebDAV</option>
+              <option value="smb">SMB/CIFS (Windows文件共享)</option>
+            </select>
           </div>
 
           {type === 'smb' ? (
@@ -982,15 +998,27 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </div>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={autoMount}
-                onChange={(e) => setAutoMount(e.target.checked)}
-              />
-              <span>启动时自动挂载</span>
-            </label>
+          <div className="form-row" style={{ alignItems: 'center' }}>
+            <div className="checkbox-group" style={{ flex: 1 }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={!removePassword}
+                  onChange={(e) => setRemovePassword(!e.target.checked)}
+                />
+                <span>保存密码</span>
+              </label>
+            </div>
+            <div className="checkbox-group" style={{ flex: 1 }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={autoMount}
+                  onChange={(e) => setAutoMount(e.target.checked)}
+                />
+                <span>启动时自动挂载</span>
+              </label>
+            </div>
           </div>
 
           <div className="modal-actions">
