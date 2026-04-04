@@ -163,10 +163,12 @@ function App() {
 
   const handleOpenFolder = async (mountPoint: string) => {
     try {
-      await invoke('open_folder', { path: mountPoint + '\\' });
+      const path = mountPoint + '\\';
+      console.log('[OpenFolder] Opening:', path);
+      await invoke('open_folder', { path });
     } catch (error) {
       console.error('Failed to open folder:', error);
-      setToast({ message: '打开文件夹失败', type: 'error' });
+      setToast({ message: '打开文件夹失败: ' + error, type: 'error' });
     }
   };
 

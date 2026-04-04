@@ -1214,16 +1214,23 @@ fn get_available_drives() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
-    info!("Opening folder: {}", path);
+    info!("[open_folder] 收到请求: {}", path);
 
     #[cfg(target_os = "windows")]
     {
-        // 对于 Windows，直接使用 explorer 打开
-        // 即使路径不存在，explorer 也会尝试打开并显示错误
-        std::process::Command::new("explorer")
+        // 使用 explorer 打开指定路径
+        info!("[open_folder] 执行: explorer {}", path);
+        let result = std::process::Command::new("explorer")
             .arg(&path)
-            .spawn()
-            .map_err(|e| format!("打开资源管理器失败: {}", e))?;
+            .spawn();
+
+        match result {
+            Ok(child) => info!("[open_folder] 成功: pid={:?}", child.id()),
+            Err(e) => {
+                error!("[open_folder] 失败: {}", e);
+                return Err(format!("打开资源管理器失败: {}", e));
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]

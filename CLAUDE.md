@@ -55,6 +55,8 @@ cargo build --release
    - 日志文件位置：`%LOCALAPPDATA%\openNetDrive\logs\opennetdrive_YYYYMMDD.log`
    - 或者 `C:\Users\<用户名>\AppData\Local\openNetDrive\logs\`
    - 日志级别：ERROR > WARN > INFO > DEBUG
+4. **自动化测试**：添加命令行参数支持自动测试，如 `--test-open-folder <path>`
+5. **测试清理**：测试过程中产生的临时文件、代码、打开的程序等，测试完成后要及时清除
 
 ### ⚠️ 预发布阶段 - 编译 Release 版本
 
