@@ -852,10 +852,62 @@ fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
         }
     }
 
-    // Save config if we added new connections
-    if added_count > 0 {
+    // 构建当前实际挂载的驱动器映射: drive -> UNC path
+    let mut current_mounts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for line in output_str.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Check if it's a drive line (starts with letter colon)
+        if line.len() >= 2 && line.chars().nth(1) == Some(':') {
+            let drive = line[0..2].to_string();
+            let rest = line[3..].trim();
+
+            // Extract remote path (UNC path)
+            if rest.starts_with("\\\\") {
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if !parts.is_empty() {
+                    current_mounts.insert(drive.to_uppercase(), parts[0].to_string());
+                }
+            }
+        }
+    }
+
+    // 检查现有连接的实际挂载状态
+    let mut updated = false;
+    for conn in config.connections.iter_mut() {
+        let is_actually_mounted = if let Some(ref mount_point) = conn.mount_point {
+            let drive = mount_point.trim_end_matches('\\').trim_end_matches(':').to_uppercase();
+            current_mounts.contains_key(&drive)
+        } else {
+            false
+        };
+
+        // 如果配置显示已挂载，但实际未挂载，则更新状态
+        if conn.enabled && !is_actually_mounted {
+            info!("Connection {} appears to be disconnected, updating enabled status", conn.name);
+            conn.enabled = false;
+            updated = true;
+        }
+        // 如果配置显示未挂载，但实际已挂载，则更新状态
+        else if !conn.enabled && is_actually_mounted {
+            info!("Connection {} is actually mounted, updating enabled status", conn.name);
+            conn.enabled = true;
+            updated = true;
+        }
+    }
+
+    // Save config if we added new connections or updated existing ones
+    if added_count > 0 || updated {
         config.save().map_err(|e| e.to_string())?;
-        info!("Added {} new SMB connections to config", added_count);
+        if added_count > 0 {
+            info!("Added {} new SMB connections to config", added_count);
+        }
+        if updated {
+            info!("Updated connection enabled status based on actual net use");
+        }
     }
 
     // Return updated connection list
