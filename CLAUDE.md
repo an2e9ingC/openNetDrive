@@ -44,20 +44,37 @@ cargo build --release
 
 ## 开发注意事项
 
+### ⚠️ 重要规则
+
+1. **未验证不提交**：用户提出的问题或需求，在没有验证通过之前，禁止提交代码
+2. **编译流程**：每次修改代码后，按以下步骤编译：
+   - 删除旧的 exe 文件
+   - 强制重新编译（touch 源文件 + cargo build --release）
+   - 检查 exe 是否成功生成
+
 ### ⚠️ 预发布阶段 - 编译 Release 版本
 
 在预发布验证阶段，修改代码后必须编译出 **release 版本**的 GUI 程序供验证：
 
 ```bash
-# 编译 release 版本
+# 编译 release 版本（完整流程）
 export PATH="/c/msys64/mingw64/bin:$PATH"
-cd packages/tauri-app/src-tauri && cargo build --release
+cd packages/tauri-app/src-tauri
 
-# 运行编译出的 exe 进行验证
-# 可执行文件位置: target/release/opennetdrive-tauri.exe
+# 1. 删除旧的 exe（如果存在）
+rm -f ../../../target/release/ond.exe
+
+# 2. 强制重新编译
+touch src/main.rs
+cargo build --release
+
+# 3. 检查编译结果
+ls -lh ../../../target/release/ond.exe
 ```
 
 **重要：release 版本的所有日志都会显示在 GUI 底部的日志面板中（debug/info/warn/error）**
+
+**注意：可执行文件名称是 `opennetdrive-tauri.exe`，位于 `target/release/` 目录**
 
 ### ⚠️ 环境变量检查 (Windows)
 

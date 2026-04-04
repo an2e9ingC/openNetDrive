@@ -9,6 +9,7 @@ export default defineConfig({
     strictPort: false,
   },
   envPrefix: ['VITE_', 'TAURI_'],
+  base: './',  // 使用相对路径
   build: {
     target: 'esnext',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,

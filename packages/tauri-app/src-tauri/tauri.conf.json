@@ -4,11 +4,7 @@
   "version": "0.2.0",
   "identifier": "com.opennetdrive.desktop",
   "build": {
-    "frontendDist": "../dist",
-    "devUrl": "",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
-    "devtools": true
+    "frontendDist": "../dist"
   },
   "app": {
     "withGlobalTauri": true,
