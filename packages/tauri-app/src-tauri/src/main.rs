@@ -1167,7 +1167,23 @@ fn update_connection_full(
             }
         }
 
-        conn.name = name;
+        // 如果连接已挂载且为SMB，保存需要的信息用于后续更新注册表
+        let should_update_registry = conn.enabled;
+        let old_name = conn.name.clone();
+        let (old_host, old_share, old_mount_point) = if should_update_registry {
+            if let ConnectionType::SMB { ref host, ref share, .. } = conn.connection_type {
+                (Some(host.clone()), Some(share.clone()), conn.mount_point.clone())
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
+        // 保存新的名称
+        let new_name = name;
+
+        conn.name = new_name.clone();
         conn.auto_mount = auto_mount.unwrap_or(conn.auto_mount);
         conn.mount_point = mount_point;
 
@@ -1202,6 +1218,18 @@ fn update_connection_full(
         }
 
         config.save().map_err(|e| e.to_string())?;
+
+        // 如果连接已挂载且为SMB，更新注册表中的驱动器标签
+        if should_update_registry {
+            if let (Some(ref mount_point), Some(ref host), Some(ref share)) = (old_mount_point, old_host, old_share) {
+                let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
+                let drive_with_colon = format!("{}:", drive.to_uppercase());
+                let unc_path = format!(r"\\{}\{}", host, share);
+                info!("Updating network drive label for connected SMB: {} -> {}", old_name, new_name);
+                let _ = set_network_drive_label(&drive_with_colon, &unc_path, &new_name);
+            }
+        }
+
         info!("Updated connection: {}", id);
         Ok(())
     } else {
