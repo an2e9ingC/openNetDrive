@@ -5,9 +5,10 @@
   "identifier": "com.opennetdrive.desktop",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:3000",
+    "devUrl": "",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build",
+    "devtools": true
   },
   "app": {
     "withGlobalTauri": true,
