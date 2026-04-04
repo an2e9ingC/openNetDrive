@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
@@ -241,13 +241,13 @@ function App() {
     setShowEditModal(true);
   };
 
-  const getHostInfo = async (id: string): Promise<string> => {
+  const getHostInfo = useCallback(async (id: string): Promise<string> => {
     try {
       return await invoke<string>('get_connection_host_info', { id });
     } catch {
       return '';
     }
-  };
+  }, []);
 
   return (
     <div className="container">
@@ -260,6 +260,23 @@ function App() {
           </div>
         )}
       </header>
+
+      {mountingId && (
+        <div className="global-loading" style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          background: 'linear-gradient(90deg, var(--accent), #9c27b0)',
+          color: 'white',
+          padding: '8px 16px',
+          textAlign: 'center',
+          zIndex: 9999,
+          fontSize: '0.9rem'
+        }}>
+          🔄 正在处理操作，请稍候...
+        </div>
+      )}
 
       {toast && (
         <div className={`toast toast-${toast.type}`}>
@@ -423,11 +440,17 @@ interface ConnectionCardProps {
   getHostInfo: () => Promise<string>;
 }
 
-function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, onDelete, mountingId, getHostInfo }: ConnectionCardProps) {
+const ConnectionCard = memo(function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, onDelete, mountingId, getHostInfo }: ConnectionCardProps) {
   const [hostInfo, setHostInfo] = useState<string>('');
 
   useEffect(() => {
-    getHostInfo().then(setHostInfo);
+    let mounted = true;
+    getHostInfo().then(info => {
+      if (mounted) {
+        setHostInfo(info);
+      }
+    });
+    return () => { mounted = false; };
   }, [connection.id, getHostInfo]);
 
   // 根据名称计算推荐的盘符
@@ -511,7 +534,7 @@ function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, 
       </div>
     </div>
   );
-}
+});
 
 interface AddModalProps {
   onClose: () => void;
