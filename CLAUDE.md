@@ -44,18 +44,20 @@ cargo build --release
 
 ## 开发注意事项
 
-### ⚠️ 调试阶段 - 编译 Debug 版本
+### ⚠️ 预发布阶段 - 编译 Release 版本
 
-在调试阶段，修改代码后必须编译出 **debug 版本**的 GUI 程序供验证：
+在预发布验证阶段，修改代码后必须编译出 **release 版本**的 GUI 程序供验证：
 
 ```bash
-# 编译 debug 版本
+# 编译 release 版本
 export PATH="/c/msys64/mingw64/bin:$PATH"
-cd packages/tauri-app/src-tauri && cargo build
+cd packages/tauri-app/src-tauri && cargo build --release
 
 # 运行编译出的 exe 进行验证
-# 可执行文件位置: target/debug/opennetdrive-tauri.exe
+# 可执行文件位置: target/release/opennetdrive-tauri.exe
 ```
+
+**重要：release 版本的所有日志都会显示在 GUI 底部的日志面板中（debug/info/warn/error）**
 
 ### ⚠️ 环境变量检查 (Windows)
 

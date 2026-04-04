@@ -5,6 +5,7 @@ use opennetdrive_core::{Config, ConnectionConfig, ConnectionType, WebDAVClient, 
 use opennetdrive_mount_win::WinFspDriver;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use tokio::sync::RwLock;
 use log::{info, error, warn, debug};
 use tauri::{
@@ -12,6 +13,53 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
+use tauri::AppHandle;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter, registry};
+
+// 全局变量存储 app_handle，用于日志发送到 GUI
+static APP_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+fn get_app_handle() -> Option<AppHandle> {
+    let ptr = APP_HANDLE.load(Ordering::SeqCst);
+    if ptr.is_null() {
+        None
+    } else {
+        // 将原始指针转换回 AppHandle
+        // 这是安全的，因为我们知道指针来自 Box::into_raw
+        unsafe { Some((ptr as *mut AppHandle).read()) }
+    }
+}
+
+// 自定义 tracing layer，将日志发送到 GUI
+struct GuiLogLayer;
+
+impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for GuiLogLayer {
+    fn on_event(&self, event: &tracing::Event, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut message = String::new();
+
+        // 获取日志级别
+        let level = match *event.metadata().level() {
+            tracing::Level::ERROR => "error",
+            tracing::Level::WARN => "warn",
+            tracing::Level::DEBUG => "debug",
+            _ => "info",
+        };
+
+        // 收集日志字段
+        use std::fmt::Write;
+        for field in event.fields() {
+            write!(&mut message, "{} ", field).ok();
+        }
+
+        // 发送到 GUI
+        if let Some(app_handle) = get_app_handle() {
+            let _ = app_handle.emit("log-event", serde_json::json!({
+                "level": level,
+                "message": message.trim()
+            }));
+        }
+    }
+}
 
 #[cfg(windows)]
 fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> Result<(), String> {
@@ -1505,11 +1553,13 @@ fn main() {
     // 设置 panic handler
     setup_panic_handler();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("opennetdrive=debug".parse().unwrap())
-        )
+    // 初始化日志系统，添加自定义 layer 发送到 GUI
+    let gui_layer = GuiLogLayer;
+    registry()
+        .with(fmt::layer())
+        .with(gui_layer)
+        .with(EnvFilter::from_default_env()
+            .add_directive("opennetdrive=debug".parse().unwrap()))
         .init();
 
     info!("Starting openNetDrive...");
@@ -1519,6 +1569,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             info!("Setting up application...");
+
+            // 保存 app_handle 到全局变量，供日志 layer 使用
+            let app_handle_box = Box::new(app.handle().clone());
+            APP_HANDLE.store(Box::into_raw(app_handle_box) as *mut std::ffi::c_void, Ordering::SeqCst);
 
             // 自动挂载之前保存的连接
             let app_handle = app.handle().clone();
