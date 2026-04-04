@@ -1220,6 +1220,27 @@ fn update_connection_full(
 ) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
+    // 首先提取需要更新注册表的信息（在修改 config 之前）
+    let should_update_registry = config.connections
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+
+    let (old_host, old_share, old_mount_point) = if should_update_registry {
+        if let Some(conn) = config.connections.iter().find(|c| c.id == id) {
+            if let ConnectionType::SMB { ref host, ref share, .. } = conn.connection_type {
+                (Some(host.clone()), Some(share.clone()), conn.mount_point.clone())
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
+
     if let Some(conn) = config.connections.iter_mut().find(|c| c.id == id) {
         // 更新密码
         if let Some(ref pwd) = password {
@@ -1230,25 +1251,15 @@ fn update_connection_full(
             }
         }
 
-        // 如果连接已挂载且为SMB，保存需要的信息用于后续更新注册表
-        let should_update_registry = conn.enabled;
-        let old_name = conn.name.clone();
-        let (old_host, old_share, old_mount_point) = if should_update_registry {
-            if let ConnectionType::SMB { ref host, ref share, .. } = conn.connection_type {
-                (Some(host.clone()), Some(share.clone()), conn.mount_point.clone())
-            } else {
-                (None, None, None)
-            }
-        } else {
-            (None, None, None)
-        };
-
         // 保存新的名称
         let new_name = name;
 
         conn.name = new_name.clone();
         conn.auto_mount = auto_mount.unwrap_or(conn.auto_mount);
         conn.mount_point = mount_point;
+
+        // 保存更新后的连接信息用于后续注册表操作（在修改 connection_type 之前）
+        let new_mount_point = conn.mount_point.clone();
 
         // 更新连接类型和远端信息
         match connection_type.as_str() {
@@ -1280,15 +1291,38 @@ fn update_connection_full(
             _ => return Err("Invalid connection type".to_string()),
         }
 
+        // 保存新的 host/share（在更新 connection_type 之后）
+        let (new_host, new_share) = if let ConnectionType::SMB { ref host, ref share, .. } = conn.connection_type {
+            (Some(host.clone()), Some(share.clone()))
+        } else {
+            (None, None)
+        };
+
         config.save().map_err(|e| e.to_string())?;
 
         // 如果连接已挂载且为SMB，更新注册表中的驱动器标签
         if should_update_registry {
-            if let (Some(ref mount_point), Some(ref host), Some(ref share)) = (old_mount_point, old_host, old_share) {
+            // 先删除旧的注册表项（如果 host/share 改变了）
+            if let (Some(ref old_mp), Some(ref old_h), Some(ref old_s)) = (&old_mount_point, &old_host, &old_share) {
+                let old_drive = old_mp.trim_end_matches('\\').trim_end_matches(':');
+                let old_drive_str = format!("{}:", old_drive.to_uppercase());
+                let old_unc_path = format!(r"\\{}\{}", old_h, old_s);
+
+                if let (Some(ref nh), Some(ref ns)) = (&new_host, &new_share) {
+                    if old_h != nh || old_s != ns {
+                        info!("[Registry] Host/share changed from {}/{} to {}/{}, clearing old registry entry",
+                            old_h, old_s, nh, ns);
+                        let _ = clear_network_drive_label(&old_drive_str, &old_unc_path);
+                    }
+                }
+            }
+
+            // 设置新的注册表项
+            if let (Some(ref mount_point), Some(ref host), Some(ref share)) = (&new_mount_point, &new_host, &new_share) {
                 let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
                 let drive_with_colon = format!("{}:", drive.to_uppercase());
                 let unc_path = format!(r"\\{}\{}", host, share);
-                info!("Updating network drive label for connected SMB: {} -> {}", old_name, new_name);
+                info!("Setting network drive label for connected SMB: {} -> {}", new_name, unc_path);
                 let _ = set_network_drive_label(&drive_with_colon, &unc_path, &new_name);
             }
         }
