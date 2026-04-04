@@ -40,7 +40,6 @@ pub struct SMBConfig {
 struct SMBState {
     connected: bool,
     server: String,
-    drive_letter: Option<String>,
 }
 
 /// SMB Protocol Client
@@ -61,7 +60,6 @@ impl SMBClient {
             state: Arc::new(Mutex::new(SMBState {
                 connected: false,
                 server: String::new(),
-                drive_letter: None,
             })),
             file_cache: Arc::new(Mutex::new(HashMap::new())),
             drive_letter: Arc::new(Mutex::new(None)),
@@ -297,6 +295,7 @@ impl SMBClient {
 
     /// Unmount the SMB share
     #[cfg(windows)]
+    #[allow(dead_code)]
     async fn unmount_share(&self, drive: &str) -> Result<bool> {
         info!("Unmounting SMB share from {}", drive);
 

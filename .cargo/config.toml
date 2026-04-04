@@ -2,4 +2,4 @@
 target-dir = "target"
 
 [profile.release]
-target-dir = "target"
+# Release profile settings

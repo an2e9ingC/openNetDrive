@@ -21,6 +21,7 @@ use std::ffi::CString;
 use std::ptr;
 
 /// File handle context
+#[allow(dead_code)]
 struct FileHandle {
     path: String,
     size: u64,
