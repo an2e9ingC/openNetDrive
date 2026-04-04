@@ -428,16 +428,17 @@ interface AddModalProps {
 
 function AddModal({ onClose, onAdded }: AddModalProps) {
   const [name, setName] = useState('');
-  const [type, setType] = useState('webdav');
+  const [type, setType] = useState('smb');
   const [host, setHost] = useState('');
   const [share, setShare] = useState('');        // SMB 共享名称
   const [remotePath, setRemotePath] = useState('/'); // SMB 远程路径
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [autoMount, setAutoMount] = useState(false);
-  const [mountPoint, setMountPoint] = useState('');
+  const [mountPoint, setMountPoint] = useState('');  // 空字符串表示自动分配
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [hostValidation, setHostValidation] = useState<{isValid: boolean; message: string; type: 'ip' | 'domain' | 'empty'}>({isValid: true, message: '', type: 'empty'});
 
   useEffect(() => {
     loadAvailableDrives();
@@ -464,6 +465,52 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
     return null;
   };
 
+  // 验证服务器地址（IP或域名）
+  const validateHost = (value: string) => {
+    if (!value || value.trim() === '') {
+      return { isValid: false, message: '', type: 'empty' as const };
+    }
+
+    const trimmed = value.trim();
+
+    // 检查是否为IP地址（简单检查：4组数字，用.分隔）
+    const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (ipPattern.test(trimmed)) {
+      const parts = trimmed.split('.');
+      // 检查每个部分是否在0-255范围内
+      const isValidIP = parts.every(part => {
+        const num = parseInt(part, 10);
+        return num >= 0 && num <= 255;
+      });
+      if (isValidIP) {
+        return { isValid: true, message: 'IP地址', type: 'ip' as const };
+      } else {
+        return { isValid: false, message: '无效的IP地址', type: 'ip' as const };
+      }
+    }
+
+    // 检查是否为域名（字母、数字、点、-，至少有一个点）
+    const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;
+    if (domainPattern.test(trimmed)) {
+      return { isValid: true, message: '域名', type: 'domain' as const };
+    }
+
+    // 简单域名检查（没有点但包含字母）
+    const simpleDomainPattern = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+    if (simpleDomainPattern.test(trimmed)) {
+      return { isValid: true, message: '计算机名', type: 'domain' as const };
+    }
+
+    return { isValid: false, message: '请输入有效的IP地址或域名', type: 'domain' as const };
+  };
+
+  // 处理服务器地址变化
+  const handleHostChange = (value: string) => {
+    setHost(value);
+    const validation = validateHost(value);
+    setHostValidation(validation);
+  };
+
   const loadAvailableDrives = async () => {
     try {
       const drives = await invoke<string[]>('get_available_drives');
@@ -479,6 +526,13 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 验证服务器地址
+    if (type === 'smb' && host && !hostValidation.isValid) {
+      alert('请输入有效的服务器地址（IP地址或域名）');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -530,7 +584,7 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             <div className="form-group">
               <label>挂载盘符</label>
               <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-                <option value="">自动选择 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
+                <option value="">自动分配 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
                 {availableDrives.map(drive => (
                   <option key={drive} value={drive}>{drive} (可用)</option>
                 ))}
@@ -543,14 +597,24 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
               {/* SMB 模式：主机和共享在同一行 */}
               <div className="form-row">
                 <div className="form-group">
-                  <label>服务器地址</label>
+                  <label>服务器地址或域名</label>
                   <input
                     type="text"
                     value={host}
-                    onChange={(e) => setHost(e.target.value)}
-                    placeholder="192.168.1.100"
+                    onChange={(e) => handleHostChange(e.target.value)}
+                    placeholder="192.168.1.100 或 nas.example.com"
                     required
+                    style={{ borderColor: host && !hostValidation.isValid ? '#ff4d4f' : undefined }}
                   />
+                  {host && (
+                    <div style={{
+                      fontSize: '12px',
+                      marginTop: '4px',
+                      color: hostValidation.isValid ? (hostValidation.type === 'ip' ? '#1890ff' : '#52c41a') : '#ff4d4f'
+                    }}>
+                      {hostValidation.isValid ? `✓ ${hostValidation.message}` : `✗ ${hostValidation.message}`}
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>共享名称</label>
@@ -669,6 +733,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [password, setPassword] = useState('');
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [hostValidation, setHostValidation] = useState<{isValid: boolean; message: string; type: 'ip' | 'domain' | 'empty'}>({isValid: true, message: '', type: 'empty'});
 
   // 根据名称计算推荐的盘符
   const getSuggestedDrive = (connectionName: string, drives: string[]): string | null => {
@@ -682,6 +747,60 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
     }
     return null;
   };
+
+  // 验证服务器地址（IP或域名）
+  const validateHost = (value: string) => {
+    if (!value || value.trim() === '') {
+      return { isValid: false, message: '', type: 'empty' as const };
+    }
+
+    const trimmed = value.trim();
+
+    // 检查是否为IP地址（简单检查：4组数字，用.分隔）
+    const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (ipPattern.test(trimmed)) {
+      const parts = trimmed.split('.');
+      // 检查每个部分是否在0-255范围内
+      const isValidIP = parts.every(part => {
+        const num = parseInt(part, 10);
+        return num >= 0 && num <= 255;
+      });
+      if (isValidIP) {
+        return { isValid: true, message: 'IP地址', type: 'ip' as const };
+      } else {
+        return { isValid: false, message: '无效的IP地址', type: 'ip' as const };
+      }
+    }
+
+    // 检查是否为域名（字母、数字、点、-，至少有一个点）
+    const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;
+    if (domainPattern.test(trimmed)) {
+      return { isValid: true, message: '域名', type: 'domain' as const };
+    }
+
+    // 简单域名检查（没有点但包含字母）
+    const simpleDomainPattern = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+    if (simpleDomainPattern.test(trimmed)) {
+      return { isValid: true, message: '计算机名', type: 'domain' as const };
+    }
+
+    return { isValid: false, message: '请输入有效的IP地址或域名', type: 'domain' as const };
+  };
+
+  // 处理服务器地址变化
+  const handleHostChange = (value: string) => {
+    setHost(value);
+    const validation = validateHost(value);
+    setHostValidation(validation);
+  };
+
+  // 初始化时验证一次host
+  useEffect(() => {
+    if (host) {
+      const validation = validateHost(host);
+      setHostValidation(validation);
+    }
+  }, []);
 
   useEffect(() => {
     loadAvailableDrives();
@@ -698,6 +817,13 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 验证服务器地址
+    if (type === 'smb' && host && !hostValidation.isValid) {
+      alert('请输入有效的服务器地址（IP地址或域名）');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -749,7 +875,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             <div className="form-group">
               <label>挂载盘符</label>
               <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-                <option value="">自动选择 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
+                <option value="">自动分配 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
                 {availableDrives.map(drive => (
                   <option key={drive} value={drive}>{drive} (可用)</option>
                 ))}
@@ -765,13 +891,23 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
               {/* SMB 模式：主机和共享在同一行 */}
               <div className="form-row">
                 <div className="form-group">
-                  <label>服务器地址</label>
+                  <label>服务器地址或域名</label>
                   <input
                     type="text"
                     value={host}
-                    onChange={(e) => setHost(e.target.value)}
-                    placeholder="192.168.1.100"
+                    onChange={(e) => handleHostChange(e.target.value)}
+                    placeholder="192.168.1.100 或 nas.example.com"
+                    style={{ borderColor: host && !hostValidation.isValid ? '#ff4d4f' : undefined }}
                   />
+                  {host && (
+                    <div style={{
+                      fontSize: '12px',
+                      marginTop: '4px',
+                      color: hostValidation.isValid ? (hostValidation.type === 'ip' ? '#1890ff' : '#52c41a') : '#ff4d4f'
+                    }}>
+                      {hostValidation.isValid ? `✓ ${hostValidation.message}` : `✗ ${hostValidation.message}`}
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>共享名称</label>
