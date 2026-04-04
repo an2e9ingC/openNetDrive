@@ -1311,7 +1311,120 @@ async fn init_auto_mount(app_handle: tauri::AppHandle) {
     }
 }
 
+// 崩溃上报配置 - 用户可以在环境中设置 GITHUB_TOKEN 和 GITHUB_REPO
+const GITHUB_OWNER: &str = "xuchuan";
+const GITHUB_REPO: &str = "openNetDrive";
+
+/// 上报崩溃信息到 GitHub
+fn report_crash_to_github(panic_info: &str) {
+    // 检查是否配置了 GitHub Token
+    let github_token = std::env::var("GITHUB_TOKEN").ok();
+    if github_token.is_none() {
+        log::warn!("GITHUB_TOKEN not set, skipping crash report");
+        return;
+    }
+    let token = github_token.unwrap();
+
+    // 构建 issue 内容
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let os_info = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    let title = format!("[Auto-Crash] {} - {}", timestamp, "openNetDrive");
+
+    let body = format!(r#"## 崩溃信息
+
+**时间:** {}
+**操作系统:** {} ({})
+**版本:** 0.1.0
+
+### 崩溃详情
+
+```
+{}
+```
+
+### 系统信息
+
+- OS: {}
+- Architecture: {}
+
+---
+*此 issue 由 openNetDrive 自动创建*
+"#, timestamp, os_info, arch, panic_info, os_info, arch);
+
+    // 发送创建 issue 的请求
+    let client = reqwest::blocking::Client::new();
+    let url = format!("https://api.github.com/repos/{}/{}/issues", GITHUB_OWNER, GITHUB_REPO);
+
+    let response = client.post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "openNetDrive/0.1.0")
+        .json(&serde_json::json!({
+            "title": title,
+            "body": body,
+            "labels": ["crash", "auto-reported"]
+        }))
+        .send();
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            log::info!("Crash report submitted to GitHub successfully");
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            log::warn!("Failed to submit crash report: {} - {}", status, text);
+        }
+        Err(e) => {
+            log::warn!("Failed to submit crash report: {}", e);
+        }
+    }
+
+    // 同时保存崩溃日志到本地文件
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let log_dir = data_dir.join("openNetDrive").join("crash_logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = log_dir.join(format!("crash_{}.log", chrono::Local::now().format("%Y%m%d_%H%M%S")));
+        let content = format!("=== Crash Report ===\nTime: {}\nOS: {} ({})\n\n{}\n",
+            timestamp, os_info, arch, panic_info);
+        let _ = std::fs::write(&log_file, content);
+        log::info!("Crash log saved to: {:?}", log_file);
+    }
+}
+
+/// 设置全局 panic hook 来捕获未处理的崩溃
+fn setup_panic_handler() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        } else {
+            "unknown location".to_string()
+        };
+
+        let panic_msg = format!("PANIC at {}: {}", location, message);
+
+        log::error!("{}", panic_msg);
+
+        // 上报到 GitHub
+        report_crash_to_github(&panic_msg);
+    }));
+}
+
 fn main() {
+    // 设置 panic handler
+    setup_panic_handler();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
