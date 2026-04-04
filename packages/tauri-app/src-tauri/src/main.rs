@@ -221,6 +221,7 @@ pub struct ConnectionInfo {
     pub username: Option<String>,
     pub share: Option<String>,       // SMB 共享名称
     pub remote_path: Option<String>, // SMB 远程路径
+    pub has_password: bool,          // 是否已保存密码
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -256,9 +257,9 @@ fn get_connections() -> Result<Vec<ConnectionInfo>, String> {
     debug!("[GetConnections] Returning {} connections", config.connections.len());
     let connections = config.connections.iter().map(|c| {
         debug!("[GetConnections] Connection {}: enabled={}, mount_point={:?}", c.name, c.enabled, c.mount_point);
-        let (connection_type, host, username, share, remote_path) = match &c.connection_type {
-            ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
-            ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
+        let (connection_type, host, username, share, remote_path, has_password) = match &c.connection_type {
+            ConnectionType::WebDAV { url, username, password, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None, password.is_some()),
+            ConnectionType::SMB { host, share, path, username, password, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone()), password.is_some()),
         };
 
         ConnectionInfo {
@@ -272,6 +273,7 @@ fn get_connections() -> Result<Vec<ConnectionInfo>, String> {
             username,
             share,
             remote_path,
+            has_password,
         }
     }).collect();
 
@@ -286,9 +288,9 @@ fn get_connection_details(id: String) -> Result<ConnectionInfo, String> {
         .find(|c| c.id == id)
         .ok_or_else(|| "Connection not found".to_string())?;
 
-    let (connection_type, host, username, share, remote_path) = match &conn.connection_type {
-        ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
-        ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
+    let (connection_type, host, username, share, remote_path, has_password) = match &conn.connection_type {
+        ConnectionType::WebDAV { url, username, password, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None, password.is_some()),
+        ConnectionType::SMB { host, share, path, username, password, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone()), password.is_some()),
     };
 
     Ok(ConnectionInfo {
@@ -302,6 +304,7 @@ fn get_connection_details(id: String) -> Result<ConnectionInfo, String> {
         username,
         share,
         remote_path,
+        has_password,
     })
 }
 
@@ -946,9 +949,9 @@ fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
 
     // Return updated connection list
     let connections = config.connections.iter().map(|c| {
-        let (connection_type, host, username, share, remote_path) = match &c.connection_type {
-            ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
-            ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
+        let (connection_type, host, username, share, remote_path, has_password) = match &c.connection_type {
+            ConnectionType::WebDAV { url, username, password, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None, password.is_some()),
+            ConnectionType::SMB { host, share, path, username, password, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone()), password.is_some()),
         };
 
         ConnectionInfo {
@@ -962,6 +965,7 @@ fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
             username,
             share,
             remote_path,
+            has_password,
         }
     }).collect();
 
@@ -1058,9 +1062,9 @@ fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
     let mounted: Vec<ConnectionInfo> = config.connections.iter()
         .filter(|c| c.enabled)
         .map(|c| {
-            let (connection_type, host, username, share, remote_path) = match &c.connection_type {
-                ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
-                ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
+            let (connection_type, host, username, share, remote_path, has_password) = match &c.connection_type {
+                ConnectionType::WebDAV { url, username, password, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None, password.is_some()),
+                ConnectionType::SMB { host, share, path, username, password, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone()), password.is_some()),
             };
 
             ConnectionInfo {
@@ -1074,6 +1078,7 @@ fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
                 username,
                 share,
                 remote_path,
+                has_password,
             }
         })
         .collect();

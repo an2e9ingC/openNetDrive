@@ -13,6 +13,7 @@ interface Connection {
   username?: string;
   share?: string;       // SMB 共享名称
   remote_path?: string; // SMB 远程路径
+  has_password?: boolean; // 是否已保存密码
 }
 
 interface Toast {
@@ -842,6 +843,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [username, setUsername] = useState(connection.username || '');
   const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
+  const hasSavedPassword = !!connection.has_password; // 是否已保存密码（只读）
   const [removePassword, setRemovePassword] = useState(false);
   const [password, setPassword] = useState('');
   const [capsLockOn, setCapsLockOn] = useState(false);
@@ -1072,12 +1074,14 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
               <label>密码 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可选)</span></label>
               <input
                 type="password"
-                value={password}
+                value={hasSavedPassword && !removePassword ? '********' : password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyUp={(e) => {
                   setCapsLockOn(e.getModifierState('CapsLock'));
                 }}
-                placeholder="留空则不更改"
+                placeholder={hasSavedPassword && !removePassword ? '已保存密码' : '留空则不更改'}
+                readOnly={hasSavedPassword && !removePassword}
+                style={{ background: hasSavedPassword && !removePassword ? 'var(--bg-secondary)' : undefined }}
               />
               {capsLockOn && (
                 <div style={{ fontSize: '12px', color: '#faad14', marginTop: '4px' }}>
@@ -1093,9 +1097,16 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
                 <input
                   type="checkbox"
                   checked={!removePassword}
-                  onChange={(e) => setRemovePassword(!e.target.checked)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setRemovePassword(!checked);
+                    if (!checked && hasSavedPassword) {
+                      // 用户取消了保存密码，需要清除已保存的密码
+                      setPassword('');
+                    }
+                  }}
                 />
-                <span>保存密码</span>
+                <span>保存密码 {hasSavedPassword && !removePassword && <span style={{ color: 'var(--success)' }}>(已保存)</span>}</span>
               </label>
             </div>
             <div className="checkbox-group" style={{ flex: 1 }}>
