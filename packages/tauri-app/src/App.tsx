@@ -434,6 +434,7 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
   const [remotePath, setRemotePath] = useState('/'); // SMB 远程路径
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [capsLockOn, setCapsLockOn] = useState(false);
   const [autoMount, setAutoMount] = useState(false);
   const [mountPoint, setMountPoint] = useState('');  // 空字符串表示自动分配
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
@@ -685,8 +686,16 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onKeyUp={(e) => {
+                  setCapsLockOn(e.getModifierState('CapsLock'));
+                }}
                 placeholder="可选"
               />
+              {capsLockOn && (
+                <div style={{ fontSize: '12px', color: '#faad14', marginTop: '4px' }}>
+                  ⚠️ 大写锁定已开启
+                </div>
+              )}
             </div>
           </div>
 
@@ -731,6 +740,7 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
   const [mountPoint, setMountPoint] = useState(connection.mount_point || '');
   const [autoMount, setAutoMount] = useState(connection.auto_mount);
   const [password, setPassword] = useState('');
+  const [capsLockOn, setCapsLockOn] = useState(false);
   const [availableDrives, setAvailableDrives] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [hostValidation, setHostValidation] = useState<{isValid: boolean; message: string; type: 'ip' | 'domain' | 'empty'}>({isValid: true, message: '', type: 'empty'});
@@ -959,8 +969,16 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onKeyUp={(e) => {
+                  setCapsLockOn(e.getModifierState('CapsLock'));
+                }}
                 placeholder="留空则不更改"
               />
+              {capsLockOn && (
+                <div style={{ fontSize: '12px', color: '#faad14', marginTop: '4px' }}>
+                  ⚠️ 大写锁定已开启
+                </div>
+              )}
             </div>
           </div>
 
