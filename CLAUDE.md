@@ -51,6 +51,10 @@ cargo build --release
    - 删除旧的 exe 文件
    - 强制重新编译（touch 源文件 + cargo build --release）
    - 检查 exe 是否成功生成
+3. **日志定位**：当出现 bug 或问题时，首先从日志文件定位问题
+   - 日志文件位置：`%LOCALAPPDATA%\openNetDrive\logs\opennetdrive_YYYYMMDD.log`
+   - 或者 `C:\Users\<用户名>\AppData\Local\openNetDrive\logs\`
+   - 日志级别：ERROR > WARN > INFO > DEBUG
 
 ### ⚠️ 预发布阶段 - 编译 Release 版本
 

@@ -13,7 +13,7 @@ use tauri::{
     Emitter, Manager, WindowEvent,
 };
 use tauri::AppHandle;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter, registry};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter, registry, layer::SubscriberExt};
 
 // 全局变量存储 app_handle，用于日志发送到 GUI
 static APP_HANDLE: OnceLock<Arc<AppHandle>> = OnceLock::new();
@@ -1216,17 +1216,14 @@ fn get_available_drives() -> Result<Vec<String>, String> {
 fn open_folder(path: String) -> Result<(), String> {
     info!("Opening folder: {}", path);
 
-    // 检查路径是否存在
-    if !std::path::Path::new(&path).exists() {
-        return Err("路径不存在，请先确认磁盘已正确挂载".to_string());
-    }
-
     #[cfg(target_os = "windows")]
     {
+        // 对于 Windows，直接使用 explorer 打开
+        // 即使路径不存在，explorer 也会尝试打开并显示错误
         std::process::Command::new("explorer")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("打开资源管理器失败: {}", e))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -1545,16 +1542,44 @@ fn main() {
     // 设置 panic handler
     setup_panic_handler();
 
+    // 获取日志文件路径
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("openNetDrive")
+        .join("logs");
+
+    // 创建日志目录
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    // 生成日志文件名（带日期）
+    let log_file = log_dir.join(format!("opennetdrive_{}.log", chrono::Local::now().format("%Y%m%d")));
+
+    // 创建文件 writer
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .expect("Failed to open log file");
+
+    let file_layer = fmt::layer()
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(file))
+        .with_target(true)
+        .with_level(true)
+        .with_thread_ids(true);
+
     // 初始化日志系统，添加自定义 layer 发送到 GUI
     let gui_layer = GuiLogLayer;
     registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_target(true).with_level(true))
+        .with(file_layer)
         .with(gui_layer)
         .with(EnvFilter::from_default_env()
             .add_directive("opennetdrive=debug".parse().unwrap()))
         .init();
 
     info!("Starting openNetDrive...");
+    info!("Log file: {:?}", log_file);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
