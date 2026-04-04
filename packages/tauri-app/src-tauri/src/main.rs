@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use opennetdrive_core::{Config, ConnectionConfig, ConnectionType, WebDAVClient, create_smb_client, mount_smb_share, CredentialManager};
+use opennetdrive_core::{Config, ConnectionConfig, ConnectionType, WebDAVClient, mount_smb_share, CredentialManager};
 use opennetdrive_mount_win::WinFspDriver;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use tauri::{
 };
 
 #[cfg(windows)]
-fn set_network_drive_label(drive_letter: &str, unc_path: &str, label: &str) -> Result<(), String> {
+fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> Result<(), String> {
     use std::process::Command;
 
     // 解析 UNC 路径，提取 server 和 share
@@ -47,7 +47,6 @@ fn set_network_drive_label(drive_letter: &str, unc_path: &str, label: &str) -> R
         .map_err(|e| format!("Failed to query reg: {}", e))?;
 
     if !check_output.status.success() {
-        let stderr = String::from_utf8_lossy(&check_output.stderr);
         // 键不存在，等待一下再试（系统可能还没创建）
         debug!("[Registry] Key not found, waiting and retrying...");
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -115,7 +114,7 @@ fn set_network_drive_label(drive_letter: &str, unc_path: &str, label: &str) -> R
 }
 
 #[cfg(windows)]
-fn clear_network_drive_label(drive_letter: &str, unc_path: &str) -> Result<(), String> {
+fn clear_network_drive_label(_drive_letter: &str, unc_path: &str) -> Result<(), String> {
     use std::process::Command;
 
     // 解析 UNC 路径
@@ -1266,7 +1265,7 @@ fn main() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().unwrap())
                 .menu(&menu)
-                .menu_on_left_click(false)
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
                         "quit" => {
