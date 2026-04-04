@@ -44,6 +44,19 @@ cargo build --release
 
 ## 开发注意事项
 
+### ⚠️ 调试阶段 - 编译 Debug 版本
+
+在调试阶段，修改代码后必须编译出 **debug 版本**的 GUI 程序供验证：
+
+```bash
+# 编译 debug 版本
+export PATH="/c/msys64/mingw64/bin:$PATH"
+cd packages/tauri-app/src-tauri && cargo build
+
+# 运行编译出的 exe 进行验证
+# 可执行文件位置: target/debug/opennetdrive-tauri.exe
+```
+
 ### ⚠️ 环境变量检查 (Windows)
 
 启动开发前，确保 MSYS2 GCC 在 PATH 中：
