@@ -253,7 +253,9 @@ impl Default for AppSettings {
 fn get_connections() -> Result<Vec<ConnectionInfo>, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
 
+    debug!("[GetConnections] Returning {} connections", config.connections.len());
     let connections = config.connections.iter().map(|c| {
+        debug!("[GetConnections] Connection {}: enabled={}, mount_point={:?}", c.name, c.enabled, c.mount_point);
         let (connection_type, host, username, share, remote_path) = match &c.connection_type {
             ConnectionType::WebDAV { url, username, .. } => ("webdav".to_string(), Some(url.clone()), Some(username.clone()), None, None),
             ConnectionType::SMB { host, share, path, username, .. } => ("smb".to_string(), Some(host.clone()), Some(username.clone()), Some(share.clone()), Some(path.clone())),
@@ -500,8 +502,10 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
                 if let Some(c) = config.connections.iter_mut().find(|c| c.id == id) {
                     c.enabled = true;
                     c.mount_point = Some(mount_point.clone());
+                    info!("[Mount] Setting connection {} enabled=true, mount_point={}", id, mount_point);
                 }
                 config.save().map_err(|e| e.to_string())?;
+                info!("[Mount] Config saved, connection {} now enabled", id);
 
                 info!("Successfully mounted SMB {} to {}", conn.name, mount_point);
                 let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("SMB 挂载成功: {} -> {}", conn.name, mount_point)}));
@@ -869,7 +873,9 @@ fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
             if rest.starts_with("\\\\") {
                 let parts: Vec<&str> = rest.split_whitespace().collect();
                 if !parts.is_empty() {
-                    current_mounts.insert(drive.to_uppercase(), parts[0].to_string());
+                    // 去掉冒号，只存储驱动器字母
+                    let drive_letter = drive.trim_end_matches(':').to_uppercase();
+                    current_mounts.insert(drive_letter, parts[0].to_string());
                 }
             }
         }
@@ -877,11 +883,16 @@ fn sync_existing_connections() -> Result<Vec<ConnectionInfo>, String> {
 
     // 检查现有连接的实际挂载状态
     let mut updated = false;
+    debug!("[Sync] Checking {} existing connections, current_mounts: {:?}", config.connections.len(), current_mounts);
     for conn in config.connections.iter_mut() {
         let is_actually_mounted = if let Some(ref mount_point) = conn.mount_point {
             let drive = mount_point.trim_end_matches('\\').trim_end_matches(':').to_uppercase();
-            current_mounts.contains_key(&drive)
+            let mounted = current_mounts.contains_key(&drive);
+            debug!("[Sync] Connection {}: mount_point={}, drive={}, is_actually_mounted={}, current_enabled={}",
+                conn.name, mount_point, drive, mounted, conn.enabled);
+            mounted
         } else {
+            debug!("[Sync] Connection {}: no mount_point, current_enabled={}", conn.name, conn.enabled);
             false
         };
 
