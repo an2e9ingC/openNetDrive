@@ -1218,19 +1218,38 @@ fn open_folder(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // 使用 explorer 打开指定路径
-        info!("[open_folder] 执行: explorer {}", path);
-        let result = std::process::Command::new("explorer")
+        // 方法1: 使用 PowerShell Start-Process（最可靠）
+        let result = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("Start-Process explorer '{}'", path)])
+            .spawn();
+
+        if let Ok(child) = result {
+            info!("[open_folder] PowerShell 成功: pid={:?}", child.id());
+            return Ok(());
+        }
+
+        // 方法2: 直接用 explorer
+        let result2 = std::process::Command::new("explorer")
             .arg(&path)
             .spawn();
 
-        match result {
-            Ok(child) => info!("[open_folder] 成功: pid={:?}", child.id()),
-            Err(e) => {
-                error!("[open_folder] 失败: {}", e);
-                return Err(format!("打开资源管理器失败: {}", e));
-            }
+        if let Ok(child) = result2 {
+            info!("[open_folder] explorer 成功: pid={:?}", child.id());
+            return Ok(());
         }
+
+        // 方法3: 使用 cmd /c start
+        let result3 = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .spawn();
+
+        if let Ok(child) = result3 {
+            info!("[open_folder] cmd /c start 成功: pid={:?}", child.id());
+            return Ok(());
+        }
+
+        // 所有方法都失败
+        return Err("打开资源管理器失败，请手动打开".to_string());
     }
 
     #[cfg(target_os = "macos")]
