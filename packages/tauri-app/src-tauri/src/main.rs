@@ -335,14 +335,23 @@ async fn add_connection(
             username,
             password: None,
         },
-        "smb" => ConnectionType::SMB {
-            host,
-            port: 445,
-            share: share.unwrap_or_else(|| "share".to_string()),
-            path: remote_path.unwrap_or_else(|| "/".to_string()),
-            username,
-            password: None,
-        },
+        "smb" => {
+            // 解析 host 字符串 (支持 host:port 格式)
+            let parts: Vec<&str> = host.split(':').collect();
+            let (smb_host, smb_port) = if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1].parse().unwrap_or(445))
+            } else {
+                (host, 445)
+            };
+            ConnectionType::SMB {
+                host: smb_host,
+                port: smb_port,
+                share: share.unwrap_or_else(|| "share".to_string()),
+                path: remote_path.unwrap_or_else(|| "/".to_string()),
+                username,
+                password: None,
+            }
+        }
         _ => return Err("Invalid connection type".to_string()),
     };
 
