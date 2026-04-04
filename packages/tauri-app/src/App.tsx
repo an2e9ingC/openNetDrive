@@ -46,10 +46,13 @@ function App() {
   const [mountedCount, setMountedCount] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // 加载设置并检测系统主题
   useEffect(() => {
+    console.log('[App] openNetDrive version 0.2.0 loaded');
     loadConnections();
     loadSettings();
 
@@ -167,15 +170,66 @@ function App() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('确定要删除此连接吗？')) return;
+    // 查找连接信息
+    const conn = connections.find(c => c.id === id);
+    console.log('[Delete] Finding connection for id:', id, 'conn:', conn);
+    if (!conn) {
+      console.log('[Delete] Connection not found');
+      setToast({ message: 'Connection not found', type: 'error' });
+      return;
+    }
 
+    console.log('[Delete] Connection found, enabled:', conn.enabled, 'name:', conn.name);
+    console.log('[Delete] Setting pending delete id:', id);
+
+    // 设置待删除的连接 ID，显示确认对话框
+    setPendingDeleteId(id);
+    setShowDeleteConfirm(true);
+  };
+
+  // 执行删除确认后的操作
+  const confirmDelete = async () => {
+    if (!pendingDeleteId) return;
+
+    const id = pendingDeleteId;
+    const conn = connections.find(c => c.id === id);
+    if (!conn) {
+      setShowDeleteConfirm(false);
+      setPendingDeleteId(null);
+      return;
+    }
+
+    // 用户确认后，如果连接已挂载，先断开
+    if (conn.enabled) {
+      console.log('[Delete] Connection is enabled, unmounting first...');
+      try {
+        setMountingId(id);
+        await invoke('unmount_connection', { id });
+        setMountingId(null);
+        console.log('[Delete] Unmount successful');
+      } catch (e) {
+        console.error('[Delete] Failed to unmount:', e);
+        setMountingId(null);
+        setToast({ message: 'Failed to unmount: ' + e, type: 'error' });
+        setShowDeleteConfirm(false);
+        setPendingDeleteId(null);
+        return;
+      }
+    }
+
+    // 删除连接
     try {
+      console.log('[Delete] Calling remove_connection backend...');
       await invoke('remove_connection', { id });
-      setToast({ message: '连接已删除', type: 'success' });
+      setToast({ message: 'Connection deleted', type: 'success' });
+      setShowDeleteConfirm(false);
+      setPendingDeleteId(null);
       loadConnections();
     } catch (error) {
-      console.error('Failed to delete:', error);
-      setToast({ message: '删除失败', type: 'error' });
+      console.error('[Delete] Failed to delete:', error);
+      setToast({ message: 'Delete failed: ' + error, type: 'error' });
+      setShowDeleteConfirm(false);
+      setPendingDeleteId(null);
     }
   };
 
@@ -316,6 +370,41 @@ function App() {
       {showAboutModal && (
         <AboutModal onClose={() => setShowAboutModal(false)} />
       )}
+
+      {/* 删除确认对话框 */}
+      {showDeleteConfirm && pendingDeleteId && (
+        <div className="modal-overlay" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>⚠️ Delete Connection</h2>
+            {(() => {
+              const conn = connections.find(c => c.id === pendingDeleteId);
+              return conn ? (
+                <>
+                  <p style={{ marginBottom: '16px' }}>
+                    {conn.enabled ? (
+                      <>This connection is currently mounted.<br/>Deleting will disconnect the drive first.</>
+                    ) : (
+                      <>Are you sure you want to delete this connection?</>
+                    )}
+                  </p>
+                  <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                    Connection: <strong>{conn.name}</strong><br/>
+                    {conn.mount_point && `Drive: ${conn.mount_point}`}
+                  </p>
+                  <div className="modal-actions">
+                    <button className="btn btn-secondary" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); }}>
+                      Cancel
+                    </button>
+                    <button className="btn btn-danger" onClick={confirmDelete}>
+                      Delete
+                    </button>
+                  </div>
+                </>
+              ) : null;
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -413,7 +502,7 @@ function ConnectionCard({ connection, onMount, onUnmount, onOpenFolder, onEdit, 
         <button className="btn btn-secondary" onClick={onEdit}>
           编辑
         </button>
-        <button className="btn btn-secondary" onClick={onDelete}>
+        <button className="btn btn-secondary" onClick={() => { console.log('[Delete] Delete button clicked, id:', connection.id); onDelete(); }}>
           删除
         </button>
       </div>
@@ -1165,7 +1254,7 @@ function AboutModal({ onClose }: { onClose: () => void }) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>ℹ️ 关于 openNetDrive</h2>
         <div className="about-content">
-          <p><strong>版本:</strong> 0.1.0</p>
+          <p><strong>版本:</strong> 0.2.0</p>
           <p><strong>描述:</strong> 跨平台的网络驱动器挂载工具</p>
           <p>支持通过 WebDAV/SMB 协议将 NAS 共享文件夹映射为本地磁盘。</p>
           <hr />

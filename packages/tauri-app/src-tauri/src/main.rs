@@ -372,23 +372,30 @@ async fn add_connection(
 }
 
 #[tauri::command]
-fn remove_connection(id: String) -> Result<(), String> {
+fn remove_connection(id: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    info!("[Remove] Starting to remove connection: {}", id);
+    let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("Starting to remove connection: {}", id)}));
+
     let mut config = Config::load().map_err(|e| e.to_string())?;
 
     // Get connection to remove credentials and cleanup registry
     if let Some(conn) = config.get_connection(&id) {
-        debug!("[Remove] Connection found: name={}, type={:?}", conn.name, conn.connection_type);
+        info!("[Remove] Found connection: name={}, enabled={}, mount_point={:?}", conn.name, conn.enabled, conn.mount_point);
+        let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": format!("Found connection: {}, enabled={}", conn.name, conn.enabled)}));
 
         // 清理注册表中的驱动器标签 (如果是 SMB 连接且已挂载)
         if let (ConnectionType::SMB { host, share, .. }, Some(ref mount_point)) = (&conn.connection_type, &conn.mount_point) {
             let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
             let drive_with_colon = format!("{}:", drive.to_uppercase());
-            let unc_path = format!(r"\\{}\{}", host, share);
-            debug!("[Remove] Clearing registry for drive: {}, UNC: {}", drive_with_colon, unc_path);
+            let host_for_reg = host.split(':').next().unwrap_or(host);
+            let unc_path = format!(r"\\{}\{}", host_for_reg, share);
+            info!("[Remove] Clearing registry for drive: {}, UNC: {}", drive_with_colon, unc_path);
             let _ = clear_network_drive_label(&drive_with_colon, &unc_path);
-            debug!("[Remove] Registry cleanup done");
+            info!("[Remove] Registry cleanup completed");
+            let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": "Registry cleanup done"}));
         } else {
-            debug!("[Remove] No mount_point found, skipping registry cleanup");
+            info!("[Remove] No mount_point found, skipping registry cleanup");
+            let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": "No mount point, skipping registry cleanup"}));
         }
 
         let username = match &conn.connection_type {
@@ -398,12 +405,15 @@ fn remove_connection(id: String) -> Result<(), String> {
 
         if let Ok(cred_manager) = CredentialManager::new() {
             let _ = cred_manager.delete_for_connection(&id, username);
+            info!("[Remove] Credentials deleted");
+            let _ = app_handle.emit("log-event", serde_json::json!({"level": "info", "message": "Credentials deleted"}));
         }
     }
 
     if config.remove_connection(&id).is_some() {
         config.save().map_err(|e| e.to_string())?;
-        debug!("[Remove] Connection removed: {}", id);
+        info!("[Remove] Connection {} removed successfully", id);
+        let _ = app_handle.emit("log-event", serde_json::json!({"level": "success", "message": format!("Connection removed: {}", id)}));
         Ok(())
     } else {
         Err("Connection not found".to_string())
@@ -499,7 +509,9 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
                 }
 
                 // 设置网络驱动器名称（通过注册表）- 修改系统创建的 ##server#share 键
-                let unc_path = format!(r"\\{}\{}", host, share);
+                // 需要从host中去除端口号，因为注册表键名不包含端口
+                let host_for_reg = host.split(':').next().unwrap_or(host);
+                let unc_path = format!(r"\\{}\{}", host_for_reg, share);
                 debug!("Setting network drive label for UNC: {}, label: {}", unc_path, conn.name);
                 if let Err(e) = set_network_drive_label(&mount_point, &unc_path, &conn.name) {
                     warn!("Failed to set network drive label: {}", e);
@@ -656,7 +668,8 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
             let drive_to_clear: Option<(String, String)> = if let (ConnectionType::SMB { host, share, .. }, Some(ref mount_point)) = (&conn.connection_type, &conn.mount_point) {
                 let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
                 let drive_str = format!("{}:", drive.to_uppercase());
-                let unc_path = format!(r"\\{}\{}", host, share);
+                let host_for_reg = host.split(':').next().unwrap_or(host);
+                let unc_path = format!(r"\\{}\{}", host_for_reg, share);
                 debug!("[Unmount] Will clear registry for drive: {}, UNC: {}", drive_str, unc_path);
                 Some((drive_str, unc_path))
             } else {
@@ -1337,7 +1350,8 @@ fn update_connection_full(
             if let (Some(ref mount_point), Some(ref host), Some(ref share)) = (&new_mount_point, &new_host, &new_share) {
                 let drive = mount_point.trim_end_matches('\\').trim_end_matches(':');
                 let drive_with_colon = format!("{}:", drive.to_uppercase());
-                let unc_path = format!(r"\\{}\{}", host, share);
+                let host_for_reg = host.split(':').next().unwrap_or(host);
+                let unc_path = format!(r"\\{}\{}", host_for_reg, share);
                 info!("Setting network drive label for connected SMB: {} -> {}", new_name, unc_path);
                 let _ = set_network_drive_label(&drive_with_colon, &unc_path, &new_name);
             }
