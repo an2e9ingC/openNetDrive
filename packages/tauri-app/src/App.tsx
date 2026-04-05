@@ -53,18 +53,7 @@ function App() {
 
   // 加载设置并检测系统主题
   useEffect(() => {
-    console.log('[App] openNetDrive version 0.2.0 loaded');
-    loadConnections();
-    loadSettings();
-
-    // 监听后端日志事件
-    const unlisten = listen<{ level: string; message: string }>('log-event', (event) => {
-      const now = new Date();
-      const time = now.toLocaleTimeString('zh-CN', { hour12: false });
-      setLogs(prev => [...prev.slice(-99), { time, level: event.payload.level, message: event.payload.message }]);
-    });
-
-    // 重写 console 方法，将前端日志发送到后端
+    // 重写 console 方法，将前端日志发送到后端（必须最先执行）
     const sendLog = (level: string, ...args: unknown[]) => {
       const message = args.map(arg => {
         if (typeof arg === 'object') {
@@ -79,8 +68,6 @@ function App() {
 
       // 发送到后端
       invoke('emit_log', { level, message }).catch(() => {});
-
-      // 同时输出到浏览器控制台
     };
 
     const originalConsole = {
@@ -106,6 +93,18 @@ function App() {
       originalConsole.info.apply(console, args);
       sendLog('info', ...args);
     };
+
+    // 现在 console 已经被重写，可以安全调用
+    console.log('[App] openNetDrive version 0.2.0 loaded');
+    loadConnections();
+    loadSettings();
+
+    // 监听后端日志事件
+    const unlisten = listen<{ level: string; message: string }>('log-event', (event) => {
+      const now = new Date();
+      const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+      setLogs(prev => [...prev.slice(-99), { time, level: event.payload.level, message: event.payload.message }]);
+    });
 
     return () => {
       unlisten.then(fn => fn());
