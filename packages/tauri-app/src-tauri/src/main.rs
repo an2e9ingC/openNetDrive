@@ -1127,6 +1127,25 @@ fn get_mounted_connections() -> Result<Vec<ConnectionInfo>, String> {
 }
 
 #[tauri::command]
+fn emit_log(level: String, message: String, app_handle: AppHandle) -> Result<(), String> {
+    // 将前端日志发送到 GUI
+    let _ = app_handle.emit("log-event", serde_json::json!({
+        "level": level,
+        "message": message
+    }));
+
+    // 同时输出到 tracing 日志
+    match level.as_str() {
+        "error" => error!("[Frontend] {}", message),
+        "warn" => warn!("[Frontend] {}", message),
+        "info" => info!("[Frontend] {}", message),
+        _ => debug!("[Frontend] {}", message),
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_settings() -> Result<AppSettings, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
 
@@ -1699,7 +1718,8 @@ fn main() {
             open_folder,
             get_connection_host_info,
             get_mounted_drives,
-            sync_existing_connections
+            sync_existing_connections,
+            emit_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

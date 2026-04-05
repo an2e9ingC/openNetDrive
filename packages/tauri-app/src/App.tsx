@@ -64,8 +64,56 @@ function App() {
       setLogs(prev => [...prev.slice(-99), { time, level: event.payload.level, message: event.payload.message }]);
     });
 
+    // 重写 console 方法，将前端日志发送到后端
+    const sendLog = (level: string, ...args: unknown[]) => {
+      const message = args.map(arg => {
+        if (typeof arg === 'object') {
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        }
+        return String(arg);
+      }).join(' ');
+
+      // 发送到后端
+      invoke('emit_log', { level, message }).catch(() => {});
+
+      // 同时输出到浏览器控制台
+    };
+
+    const originalConsole = {
+      log: console.log,
+      error: console.error,
+      warn: console.warn,
+      info: console.info,
+    };
+
+    console.log = (...args: unknown[]) => {
+      originalConsole.log.apply(console, args);
+      sendLog('debug', ...args);
+    };
+    console.error = (...args: unknown[]) => {
+      originalConsole.error.apply(console, args);
+      sendLog('error', ...args);
+    };
+    console.warn = (...args: unknown[]) => {
+      originalConsole.warn.apply(console, args);
+      sendLog('warn', ...args);
+    };
+    console.info = (...args: unknown[]) => {
+      originalConsole.info.apply(console, args);
+      sendLog('info', ...args);
+    };
+
     return () => {
       unlisten.then(fn => fn());
+      // 恢复原始 console
+      console.log = originalConsole.log;
+      console.error = originalConsole.error;
+      console.warn = originalConsole.warn;
+      console.info = originalConsole.info;
     };
   }, []);
 
