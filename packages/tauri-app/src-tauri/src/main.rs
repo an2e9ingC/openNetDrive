@@ -1232,6 +1232,65 @@ fn get_available_drives() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn get_log_file_path() -> Result<String, String> {
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("openNetDrive")
+        .join("logs");
+
+    // 获取最新的日志文件
+    let log_file = std::fs::read_dir(&log_dir)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "log"))
+                .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+                .map(|e| e.path())
+        });
+
+    match log_file {
+        Some(path) => Ok(path.to_string_lossy().to_string()),
+        None => Err("日志文件不存在".to_string()),
+    }
+}
+
+#[tauri::command]
+fn open_log_file() -> Result<(), String> {
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("openNetDrive")
+        .join("logs");
+
+    // 获取最新的日志文件
+    let log_file = std::fs::read_dir(&log_dir)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "log"))
+                .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+                .map(|e| e.path())
+        });
+
+    match log_file {
+        Some(path) => {
+            let path_str = path.to_string_lossy().to_string();
+            info!("[open_log_file] 打开日志文件: {}", path_str);
+
+            // 直接用 cmd 打开
+            std::process::Command::new("cmd")
+                .args(["/c", "start", "", "notepad.exe", &path_str])
+                .spawn()
+                .map_err(|e| format!("打开日志文件失败: {}", e))?;
+
+            Ok(())
+        }
+        None => Err("日志文件不存在".to_string()),
+    }
+}
+
+#[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     info!("[open_folder] 收到请求: {}", path);
 
@@ -1286,8 +1345,6 @@ fn open_folder(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -1719,7 +1776,9 @@ fn main() {
             get_connection_host_info,
             get_mounted_drives,
             sync_existing_connections,
-            emit_log
+            emit_log,
+            get_log_file_path,
+            open_log_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

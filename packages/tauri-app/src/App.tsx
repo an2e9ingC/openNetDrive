@@ -66,32 +66,38 @@ function App() {
         return String(arg);
       }).join(' ');
 
-      // 发送到后端
-      invoke('emit_log', { level, message }).catch(() => {});
+      // 发送到后端，使用 Promise 处理错误
+      invoke('emit_log', { level, message }).catch(() => {
+        // 静默处理错误，避免无限循环
+      });
     };
 
-    const originalConsole = {
-      log: console.log,
-      error: console.error,
-      warn: console.warn,
-      info: console.info,
-    };
+    // 保存原始方法的引用
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    const originalInfo = console.info;
 
-    console.log = (...args: unknown[]) => {
-      originalConsole.log.apply(console, args);
+    // 重写 console 方法
+    console.log = function(...args: unknown[]) {
+      originalLog.apply(console, args);
       sendLog('debug', ...args);
     };
-    console.error = (...args: unknown[]) => {
-      originalConsole.error.apply(console, args);
+    console.error = function(...args: unknown[]) {
+      originalError.apply(console, args);
       sendLog('error', ...args);
     };
-    console.warn = (...args: unknown[]) => {
-      originalConsole.warn.apply(console, args);
+    console.warn = function(...args: unknown[]) {
+      originalWarn.apply(console, args);
       sendLog('warn', ...args);
     };
-    console.info = (...args: unknown[]) => {
-      originalConsole.info.apply(console, args);
+    console.info = function(...args: unknown[]) {
+      originalInfo.apply(console, args);
       sendLog('info', ...args);
+    };
+    console.debug = function(...args: unknown[]) {
+      originalLog.apply(console, args);
+      sendLog('debug', ...args);
     };
 
     // 现在 console 已经被重写，可以安全调用
@@ -109,10 +115,10 @@ function App() {
     return () => {
       unlisten.then(fn => fn());
       // 恢复原始 console
-      console.log = originalConsole.log;
-      console.error = originalConsole.error;
-      console.warn = originalConsole.warn;
-      console.info = originalConsole.info;
+      console.log = originalLog;
+      console.error = originalError;
+      console.warn = originalWarn;
+      console.info = originalInfo;
     };
   }, []);
 
@@ -381,7 +387,22 @@ function App() {
         <div className="log-panel">
           <div className="log-header">
             <span>日志</span>
-            <button className="btn-clear" onClick={() => setLogs([])}>清空</button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="btn-clear"
+                onClick={async () => {
+                  try {
+                    await invoke('open_log_file');
+                  } catch (error) {
+                    console.error('Failed to open log file:', error);
+                  }
+                }}
+                title="用记事本打开日志文件"
+              >
+                打开日志
+              </button>
+              <button className="btn-clear" onClick={() => setLogs([])}>清空</button>
+            </div>
           </div>
           <div className="log-content">
             {logs.map((log, index) => (
