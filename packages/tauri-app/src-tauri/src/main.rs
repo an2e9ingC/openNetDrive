@@ -80,19 +80,11 @@ fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> 
     debug!("[Registry] Server: {}, Share: {}, Full key: {}", server, share, server_share_key);
     debug!("[Registry] Setting label at: {}, label: {}", reg_path, label);
 
-    // 第一步：检查注册表键是否存在，同时记录当前值（调试用）
-    debug!("[Registry] === BEFORE SET: Querying current registry state ===");
+    // 检查注册表键是否存在
     let check_output = Command::new("reg")
         .args(["query", &reg_path])
         .output()
         .map_err(|e| format!("Failed to query reg: {}", e))?;
-
-    if check_output.status.success() {
-        let stdout = String::from_utf8_lossy(&check_output.stdout);
-        debug!("[Registry] Current registry content:\n{}", stdout);
-    } else {
-        debug!("[Registry] Key not found (first check)");
-    }
 
     if !check_output.status.success() {
         // 键不存在，等待一下再试（系统可能还没创建）
@@ -112,7 +104,12 @@ fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> 
 
     debug!("[Registry] Registry key exists, now setting value");
 
-    // 第二步：设置 _LabelFromDesktopINI 值
+    // 如果标签值已存在，先删除旧值（确保系统能识别更新）
+    let _ = Command::new("reg")
+        .args(["delete", &reg_path, "/v", "_LabelFromDesktopINI", "/f"])
+        .output();
+
+    // 设置 _LabelFromDesktopINI 值
     let mut last_error = String::new();
     for attempt in 1..=3 {
         debug!("[Registry] Setting label, attempt {}", attempt);
@@ -136,18 +133,6 @@ fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> 
                 debug!("[Registry] Verify output: {}", stdout.trim());
                 if stdout.contains(label) {
                     debug!("[Registry] Verification passed: label set to {}", label);
-
-                    // 设置成功后，再次查询确认最终状态
-                    debug!("[Registry] === AFTER SET: Querying final registry state ===");
-                    let final_output = Command::new("reg")
-                        .args(["query", &reg_path])
-                        .output()
-                        .map_err(|e| format!("Failed to query reg: {}", e))?;
-                    if final_output.status.success() {
-                        let final_stdout = String::from_utf8_lossy(&final_output.stdout);
-                        debug!("[Registry] Final registry content:\n{}", final_stdout);
-                    }
-
                     return Ok(());
                 } else {
                     warn!("[Registry] Verification failed: expected '{}' but output is: {}", label, stdout.trim());
@@ -548,12 +533,10 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
                 // 需要从host中去除端口号，因为注册表键名不包含端口
                 let host_for_reg = host.split(':').next().unwrap_or(host);
                 let unc_path = format!(r"\\{}\{}", host_for_reg, share);
-                info!("=== MOUNT: About to set label for drive {} UNC {} label {} ===", mount_point, unc_path, conn.name);
                 debug!("Setting network drive label for UNC: {}, label: {}", unc_path, conn.name);
                 if let Err(e) = set_network_drive_label(&mount_point, &unc_path, &conn.name) {
                     warn!("Failed to set network drive label: {}", e);
                 } else {
-                    info!("=== MOUNT: Label set completed for {} ===", conn.name);
                     debug!("Network drive label set successfully");
                 }
 
@@ -734,10 +717,8 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
 
                     // 清理注册表中的驱动器标签（在更新配置之前）
                     if let Some((ref drive, ref unc_path)) = drive_to_clear {
-                        info!("=== UNMOUNT: About to clear label for drive {} UNC {} ===", drive, unc_path);
                         debug!("[Unmount] Calling clear_network_drive_label for: {}, UNC: {}", drive, unc_path);
                         let _ = clear_network_drive_label(drive, unc_path);
-                        info!("=== UNMOUNT: Label clear completed for {} ===", drive);
                         debug!("[Unmount] clear_network_drive_label returned");
                     }
                 }
