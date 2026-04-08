@@ -80,11 +80,19 @@ fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> 
     debug!("[Registry] Server: {}, Share: {}, Full key: {}", server, share, server_share_key);
     debug!("[Registry] Setting label at: {}, label: {}", reg_path, label);
 
-    // 第一步：检查注册表键是否存在
+    // 第一步：检查注册表键是否存在，同时记录当前值（调试用）
+    debug!("[Registry] === BEFORE SET: Querying current registry state ===");
     let check_output = Command::new("reg")
         .args(["query", &reg_path])
         .output()
         .map_err(|e| format!("Failed to query reg: {}", e))?;
+
+    if check_output.status.success() {
+        let stdout = String::from_utf8_lossy(&check_output.stdout);
+        debug!("[Registry] Current registry content:\n{}", stdout);
+    } else {
+        debug!("[Registry] Key not found (first check)");
+    }
 
     if !check_output.status.success() {
         // 键不存在，等待一下再试（系统可能还没创建）
@@ -128,6 +136,18 @@ fn set_network_drive_label(_drive_letter: &str, unc_path: &str, label: &str) -> 
                 debug!("[Registry] Verify output: {}", stdout.trim());
                 if stdout.contains(label) {
                     debug!("[Registry] Verification passed: label set to {}", label);
+
+                    // 设置成功后，再次查询确认最终状态
+                    debug!("[Registry] === AFTER SET: Querying final registry state ===");
+                    let final_output = Command::new("reg")
+                        .args(["query", &reg_path])
+                        .output()
+                        .map_err(|e| format!("Failed to query reg: {}", e))?;
+                    if final_output.status.success() {
+                        let final_stdout = String::from_utf8_lossy(&final_output.stdout);
+                        debug!("[Registry] Final registry content:\n{}", final_stdout);
+                    }
+
                     return Ok(());
                 } else {
                     warn!("[Registry] Verification failed: expected '{}' but output is: {}", label, stdout.trim());
@@ -172,53 +192,26 @@ fn clear_network_drive_label(_drive_letter: &str, unc_path: &str) -> Result<(), 
     let server_share_key = format!("##{}#{}", server, share);
     let reg_path = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\{}", server_share_key);
 
-    debug!("[Registry] Deleting label at: {}", reg_path);
+    debug!("[Registry] Clearing label at: {}", reg_path);
 
-    // 尝试删除，最多重试2次
-    for attempt in 1..=2 {
-        let output = Command::new("reg")
-            .args(["delete", &reg_path, "/f"])
-            .output()
-            .map_err(|e| format!("Failed to execute reg: {}", e))?;
-
-        if output.status.success() {
-            debug!("[Registry] Delete success, verifying...");
-
-            // 验证删除是否成功
-            let verify_output = Command::new("reg")
-                .args(["query", &reg_path])
-                .output()
-                .map_err(|e| format!("Failed to verify reg: {}", e))?;
-
-            if !verify_output.status.success() {
-                debug!("[Registry] Delete verification passed: key removed");
-                return Ok(());
-            }
-            debug!("[Registry] Delete verification: key still exists, retrying...");
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("unable to find") || stderr.contains("系统找不到") || stderr.contains("The system was unable to find") {
-                debug!("[Registry] Key already deleted or not found");
-                return Ok(());
-            }
-            warn!("[Registry] Delete failed: {}", stderr);
-        }
-
-        if attempt < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-    }
-
-    // 最后检查一次
-    let check_output = Command::new("reg")
-        .args(["query", &reg_path])
+    // 删除整个注册表键（包含 _LabelFromDesktopINI 值）
+    let output = Command::new("reg")
+        .args(["delete", &reg_path, "/f"])
         .output()
-        .map_err(|e| format!("Failed to check reg: {}", e))?;
+        .map_err(|e| format!("Failed to execute reg: {}", e))?;
 
-    if check_output.status.success() {
-        warn!("[Registry] Warning: key still exists after delete attempts");
+    if output.status.success() {
+        debug!("[Registry] Label key deleted successfully");
+        return Ok(());
     }
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("unable to find") || stderr.contains("系统找不到") || stderr.contains("The system was unable to find") {
+        debug!("[Registry] Key already deleted or not found");
+        return Ok(());
+    }
+
+    warn!("[Registry] Failed to delete label: {}", stderr);
     Ok(())
 }
 
@@ -555,10 +548,12 @@ async fn mount_connection(id: String, app_handle: tauri::AppHandle) -> Result<Mo
                 // 需要从host中去除端口号，因为注册表键名不包含端口
                 let host_for_reg = host.split(':').next().unwrap_or(host);
                 let unc_path = format!(r"\\{}\{}", host_for_reg, share);
+                info!("=== MOUNT: About to set label for drive {} UNC {} label {} ===", mount_point, unc_path, conn.name);
                 debug!("Setting network drive label for UNC: {}, label: {}", unc_path, conn.name);
                 if let Err(e) = set_network_drive_label(&mount_point, &unc_path, &conn.name) {
                     warn!("Failed to set network drive label: {}", e);
                 } else {
+                    info!("=== MOUNT: Label set completed for {} ===", conn.name);
                     debug!("Network drive label set successfully");
                 }
 
@@ -739,8 +734,10 @@ async fn unmount_connection(id: String, app_handle: tauri::AppHandle) -> Result<
 
                     // 清理注册表中的驱动器标签（在更新配置之前）
                     if let Some((ref drive, ref unc_path)) = drive_to_clear {
+                        info!("=== UNMOUNT: About to clear label for drive {} UNC {} ===", drive, unc_path);
                         debug!("[Unmount] Calling clear_network_drive_label for: {}, UNC: {}", drive, unc_path);
                         let _ = clear_network_drive_label(drive, unc_path);
+                        info!("=== UNMOUNT: Label clear completed for {} ===", drive);
                         debug!("[Unmount] clear_network_drive_label returned");
                     }
                 }
@@ -1658,8 +1655,8 @@ fn main() {
     // 创建日志目录
     let _ = std::fs::create_dir_all(&log_dir);
 
-    // 生成日志文件名（带日期）
-    let log_file = log_dir.join(format!("opennetdrive_{}.log", chrono::Local::now().format("%Y%m%d")));
+    // 生成日志文件名（带日期和时间，每次启动独立文件）
+    let log_file = log_dir.join(format!("opennetdrive_{}.log", chrono::Local::now().format("%Y%m%d_%H%M%S")));
 
     // 创建文件 writer
     let file = std::fs::OpenOptions::new()
