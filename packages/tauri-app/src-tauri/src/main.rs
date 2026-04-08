@@ -1262,6 +1262,11 @@ fn open_log_file() -> Result<(), String> {
         .join("openNetDrive")
         .join("logs");
 
+    // 检查目录是否存在
+    if !log_dir.exists() {
+        return Err("日志目录不存在".to_string());
+    }
+
     // 获取最新的日志文件
     let log_file = std::fs::read_dir(&log_dir)
         .ok()
@@ -1278,15 +1283,15 @@ fn open_log_file() -> Result<(), String> {
             let path_str = path.to_string_lossy().to_string();
             info!("[open_log_file] 打开日志文件: {}", path_str);
 
-            // 直接用 cmd 打开
-            std::process::Command::new("cmd")
-                .args(["/c", "start", "", "notepad.exe", &path_str])
+            // 用 PowerShell Start-Process 打开日志文件（避免 os error 50）
+            std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &format!("Start-Process notepad.exe '{}'", path_str)])
                 .spawn()
                 .map_err(|e| format!("打开日志文件失败: {}", e))?;
 
             Ok(())
         }
-        None => Err("日志文件不存在".to_string()),
+        None => Err("未找到日志文件".to_string()),
     }
 }
 

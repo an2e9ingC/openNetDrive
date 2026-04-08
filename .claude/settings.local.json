@@ -3,7 +3,8 @@
     "allow": [
       "WebFetch",
       "WebSearch",
-      "Bash"
+      "Bash",
+      "Read(//c/Users/xuchuan/AppData/Local/openNetDrive/logs/**)"
     ],
     "deny": [
       "Bash(rm -rf .git)",
