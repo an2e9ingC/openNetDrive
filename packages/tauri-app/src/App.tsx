@@ -40,6 +40,7 @@ function App() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAboutModal, setShowAboutModal] = useState(false);
+  const [appVersion, setAppVersion] = useState('0.0.0');
   const [editingConnection, setEditingConnection] = useState<Connection | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -50,6 +51,13 @@ function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  // 获取应用版本号
+  useEffect(() => {
+    invoke<string>('get_app_version')
+      .then(setAppVersion)
+      .catch(() => {});
+  }, []);
 
   // 加载设置并检测系统主题
   useEffect(() => {
@@ -101,7 +109,7 @@ function App() {
     };
 
     // 现在 console 已经被重写，可以安全调用
-    console.log('[App] openNetDrive version 0.2.0 loaded');
+    console.log('[App] openNetDrive version 0.2.1 loaded');
     loadConnections();
     loadSettings();
 
@@ -456,7 +464,7 @@ function App() {
       )}
 
       {showAboutModal && (
-        <AboutModal onClose={() => setShowAboutModal(false)} />
+        <AboutModal version={appVersion} onClose={() => setShowAboutModal(false)} />
       )}
 
       {/* 删除确认对话框 */}
@@ -721,8 +729,11 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
     setSubmitting(true);
 
     try {
+      // 如果名称为空，使用共享名称作为默认名称
+      const finalName = name.trim() || share || '未命名';
+
       await invoke('add_connection', {
-        name,
+        name: finalName,
         connectionType: type,
         host,
         share: share || null,
@@ -746,29 +757,6 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>➕ 添加连接</h2>
         <form onSubmit={handleSubmit}>
-          {/* 名称和挂载盘符在同一行 */}
-          <div className="form-row">
-            <div className="form-group">
-              <label>名称</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例如：我的 NAS"
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>挂载盘符</label>
-              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-                <option value="">自动分配 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
-                {availableDrives.map(drive => (
-                  <option key={drive} value={drive}>{drive} (可用)</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
           {/* 协议类型单独一行 */}
           <div className="form-group">
             <label>协议类型</label>
@@ -807,7 +795,14 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
                   <input
                     type="text"
                     value={share}
-                    onChange={(e) => setShare(e.target.value)}
+                    onChange={(e) => {
+                      const newShare = e.target.value;
+                      setShare(newShare);
+                      // 如果名称为空或是原来的共享名，自动填入新共享名称
+                      if (!name || name === share) {
+                        setName(newShare);
+                      }
+                    }}
                     placeholder="sharedfolder"
                     required
                   />
@@ -847,7 +842,22 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
               <input
                 type="text"
                 value={host}
-                onChange={(e) => setHost(e.target.value)}
+                onChange={(e) => {
+                  const url = e.target.value;
+                  setHost(url);
+                  // 如果名称为空，从 URL 路径中提取最后一段作为名称
+                  if (!name && url) {
+                    try {
+                      const path = new URL(url).pathname;
+                      const pathParts = path.split('/').filter(Boolean);
+                      if (pathParts.length > 0) {
+                        setName(pathParts[pathParts.length - 1]);
+                      }
+                    } catch {
+                      // URL 解析失败，不处理
+                    }
+                  }
+                }}
                 placeholder="https://example.com/dav"
                 required
               />
@@ -884,6 +894,29 @@ function AddModal({ onClose, onAdded }: AddModalProps) {
             </div>
           </div>
 
+          {/* 名称和挂载盘符放在倒数第二行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>名称 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可自定义)</span></label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：我的 NAS"
+              />
+            </div>
+            <div className="form-group">
+              <label>挂载盘符</label>
+              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+                <option value="">自动分配 {getSuggestedDrive(name || share, availableDrives) ? `(将使用 ${getSuggestedDrive(name || share, availableDrives)})` : ''}</option>
+                {availableDrives.map(drive => (
+                  <option key={drive} value={drive}>{drive} (可用)</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* 保存密码和自启动放在最后一行 */}
           <div className="form-row" style={{ alignItems: 'center' }}>
             <div className="checkbox-group" style={{ flex: 1 }}>
               <label className="checkbox-label">
@@ -1036,9 +1069,12 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
     setSubmitting(true);
 
     try {
+      // 如果名称为空，使用共享名称作为默认名称
+      const finalName = name.trim() || share || connection.name;
+
       await invoke('update_connection_full', {
         id: connection.id,
-        name,
+        name: finalName,
         connectionType: type,
         host,
         share: share || null,
@@ -1062,31 +1098,6 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>✏️ 编辑连接</h2>
         <form onSubmit={handleSubmit}>
-          {/* 名称和挂载盘符在同一行 */}
-          <div className="form-row">
-            <div className="form-group">
-              <label>名称</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>挂载盘符</label>
-              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
-                <option value="">自动分配 {getSuggestedDrive(name, availableDrives) ? `(将使用 ${getSuggestedDrive(name, availableDrives)})` : ''}</option>
-                {availableDrives.map(drive => (
-                  <option key={drive} value={drive}>{drive} (可用)</option>
-                ))}
-                {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
-                  <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
-                )}
-              </select>
-            </div>
-          </div>
-
           {/* 协议类型单独一行 */}
           <div className="form-group">
             <label>协议类型</label>
@@ -1124,7 +1135,14 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
                   <input
                     type="text"
                     value={share}
-                    onChange={(e) => setShare(e.target.value)}
+                    onChange={(e) => {
+                      const newShare = e.target.value;
+                      setShare(newShare);
+                      // 如果名称为空或是原来的共享名，自动填入新共享名称
+                      if (!name || name === share) {
+                        setName(newShare);
+                      }
+                    }}
                     placeholder="sharedfolder"
                   />
                 </div>
@@ -1146,7 +1164,24 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
               <input
                 type="text"
                 value={host}
-                onChange={(e) => setHost(e.target.value)}
+                onChange={(e) => {
+                  const url = e.target.value;
+                  setHost(url);
+                  // 如果名称为空或是原来的 URL 对应的路径名，自动填入新名称
+                  if (!name || name === connection.remote_path?.split('/').pop()) {
+                    if (url) {
+                      try {
+                        const path = new URL(url).pathname;
+                        const pathParts = path.split('/').filter(Boolean);
+                        if (pathParts.length > 0) {
+                          setName(pathParts[pathParts.length - 1]);
+                        }
+                      } catch {
+                        // URL 解析失败，不处理
+                      }
+                    }
+                  }
+                }}
                 placeholder="https://example.com/dav"
               />
             </div>
@@ -1184,6 +1219,32 @@ function EditModal({ connection, onClose, onUpdated }: EditModalProps) {
             </div>
           </div>
 
+          {/* 名称和挂载盘符放在倒数第二行 */}
+          <div className="form-row">
+            <div className="form-group">
+              <label>名称 <span style={{opacity: 0.6, fontWeight: 'normal'}}>(可自定义)</span></label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：我的 NAS"
+              />
+            </div>
+            <div className="form-group">
+              <label>挂载盘符</label>
+              <select value={mountPoint} onChange={(e) => setMountPoint(e.target.value)}>
+                <option value="">自动分配 {getSuggestedDrive(name || share, availableDrives) ? `(将使用 ${getSuggestedDrive(name || share, availableDrives)})` : ''}</option>
+                {availableDrives.map(drive => (
+                  <option key={drive} value={drive}>{drive} (可用)</option>
+                ))}
+                {connection.mount_point && !availableDrives.includes(connection.mount_point) && (
+                  <option value={connection.mount_point}>{connection.mount_point} (当前)</option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {/* 保存密码和自启动放在最后一行 */}
           <div className="form-row" style={{ alignItems: 'center' }}>
             <div className="checkbox-group" style={{ flex: 1 }}>
               <label className="checkbox-label">
@@ -1352,13 +1413,13 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
   );
 }
 
-function AboutModal({ onClose }: { onClose: () => void }) {
+function AboutModal({ onClose, version }: { onClose: () => void; version: string }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>ℹ️ 关于 openNetDrive</h2>
         <div className="about-content">
-          <p><strong>版本:</strong> 0.2.0</p>
+          <p><strong>版本:</strong> {version}</p>
           <p><strong>描述:</strong> 跨平台的网络驱动器挂载工具</p>
           <p>支持通过 WebDAV/SMB 协议将 NAS 共享文件夹映射为本地磁盘。</p>
           <hr />

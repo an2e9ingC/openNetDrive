@@ -48,6 +48,7 @@ cargo build --release
 
 1. **未验证不提交**：用户提出的问题或需求，在没有验证通过之前，禁止提交代码
 2. **编译流程**：每次修改代码后，按以下步骤编译：
+   - 涉及前端界面更改时：先执行 `npm run build` 构建前端资源
    - 删除旧的 exe 文件
    - 强制重新编译（touch 源文件 + cargo build --release）
    - 检查 exe 是否成功生成
@@ -57,6 +58,7 @@ cargo build --release
    - 日志级别：ERROR > WARN > INFO > DEBUG
 4. **自动化测试**：添加命令行参数支持自动测试，如 `--test-open-folder <path>`
 5. **测试清理**：测试过程中产生的临时文件、代码、打开的程序等，测试完成后要及时清除
+6. **版本号更新**：每次修改代码后，只需更新 `packages/tauri-app/src-tauri/tauri.conf.json` 中的 version 字段（这是版本号的唯一来源）
 
 ### ⚠️ 预发布阶段 - 编译 Release 版本
 
@@ -65,17 +67,21 @@ cargo build --release
 ```bash
 # 编译 release 版本（完整流程）
 export PATH="/c/msys64/mingw64/bin:$PATH"
-cd packages/tauri-app/src-tauri
+cd packages/tauri-app
 
-# 1. 删除旧的 exe（如果存在）
-rm -f ../../../target/release/ond.exe
+# 1. 构建前端资源（界面更改必须）
+npm run build
 
-# 2. 强制重新编译
+# 2. 删除旧的 exe（如果存在）
+cd src-tauri
+rm -f ../../../target/release/opennetdrive-tauri.exe
+
+# 3. 强制重新编译
 touch src/main.rs
 cargo build --release
 
-# 3. 检查编译结果
-ls -lh ../../../target/release/ond.exe
+# 4. 检查编译结果
+ls -lh ../../../target/release/opennetdrive-tauri.exe
 ```
 
 **重要：release 版本的所有日志都会显示在 GUI 底部的日志面板中（debug/info/warn/error）**

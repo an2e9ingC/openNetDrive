@@ -375,6 +375,8 @@ body {
 
 /* Checkbox */
 .checkbox-group {
+  flex: 1;
+  min-width: 0;
   padding: 8px 0;
 }
 
