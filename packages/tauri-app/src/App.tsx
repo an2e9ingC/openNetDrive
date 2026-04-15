@@ -50,6 +50,9 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [quitDisconnect, setQuitDisconnect] = useState(false);
+  const [showCleanLogConfirm, setShowCleanLogConfirm] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // 获取应用版本号
@@ -312,6 +315,97 @@ function App() {
 
   return (
     <div className="container">
+      {/* 自定义标题栏 */}
+      <div className="title-bar" data-tauri-drag-region>
+        <div className="title-bar-title" data-tauri-drag-region>openNetDrive</div>
+        <div className="title-bar-buttons">
+          <button
+            className="title-bar-btn minimize"
+            onClick={async () => {
+              try {
+                await invoke('minimize_to_tray');
+              } catch (e) {
+                console.error('最小化失败:', e);
+              }
+            }}
+            title="最小化到托盘"
+          >
+            ─
+          </button>
+          <button
+            className="title-bar-btn close"
+            onClick={() => setShowQuitConfirm(true)}
+            title="退出"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      {/* 退出确认对话框 */}
+      {showQuitConfirm && (
+        <div className="modal-overlay" onClick={() => setShowQuitConfirm(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>确认退出</h2>
+            <p>确定要退出 openNetDrive 吗？</p>
+            <div className="form-group" style={{ marginTop: '16px' }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={quitDisconnect}
+                  onChange={(e) => setQuitDisconnect(e.target.checked)}
+                />
+                <span>断开所有已连接的驱动器</span>
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowQuitConfirm(false)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary" onClick={async () => {
+                try {
+                  if (quitDisconnect) {
+                    await invoke('unmount_all_connections');
+                  }
+                  await invoke('quit_app');
+                } catch (e) {
+                  console.error('退出失败:', e);
+                }
+              }}>
+                确定退出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 清理日志确认对话框 */}
+      {showCleanLogConfirm && (
+        <div className="modal-overlay" onClick={() => setShowCleanLogConfirm(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>清理日志</h2>
+            <p>确定要清理历史日志文件吗？（保留今天的日志）</p>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowCleanLogConfirm(false)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary" onClick={async () => {
+                try {
+                  const count = await invoke<number>('clean_log_files');
+                  setShowCleanLogConfirm(false);
+                  setToast({ message: `已清理 ${count} 个历史日志文件`, type: 'success' });
+                } catch (error) {
+                  console.error('清理日志失败:', error);
+                  setShowCleanLogConfirm(false);
+                }
+              }}>
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="header">
         <h1>openNetDrive</h1>
         <p className="subtitle">网络驱动器挂载工具</p>
@@ -398,6 +492,13 @@ function App() {
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 className="btn-clear"
+                onClick={() => setShowCleanLogConfirm(true)}
+                title="删除历史日志文件（保留今天的日志）"
+              >
+                清理
+              </button>
+              <button
+                className="btn-clear"
                 onClick={async () => {
                   try {
                     await invoke('open_log_file');
@@ -409,7 +510,7 @@ function App() {
               >
                 打开日志
               </button>
-              <button className="btn-clear" onClick={() => setLogs([])}>清空</button>
+              <button className="btn-clear" onClick={() => setLogs([])}>清屏</button>
             </div>
           </div>
           <div className="log-content">

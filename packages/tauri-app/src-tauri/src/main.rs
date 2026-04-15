@@ -1279,6 +1279,102 @@ fn open_log_file() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn clean_log_files() -> Result<u32, String> {
+    let log_dir = dirs::data_local_dir()
+        .ok_or("无法获取本地数据目录")?
+        .join("openNetDrive")
+        .join("logs");
+
+    if !log_dir.exists() {
+        return Ok(0);
+    }
+
+    let mut deleted_count = 0;
+    let entries = std::fs::read_dir(&log_dir)
+        .map_err(|e| format!("无法读取日志目录: {}", e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == "log" {
+                    // 不删除今天的日志文件
+                    let file_name = path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    let today = chrono::Local::now().format("%Y%m%d").to_string();
+                    if !file_name.contains(&today) {
+                        if std::fs::remove_file(&path).is_ok() {
+                            deleted_count += 1;
+                            info!("[clean_log_files] 已删除: {:?}", path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(deleted_count)
+}
+
+#[tauri::command]
+fn minimize_to_tray(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())?;
+    info!("[minimize_to_tray] 窗口已隐藏到托盘");
+    Ok(())
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    info!("[quit_app] 退出应用");
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+fn unmount_all_connections(app: tauri::AppHandle) -> Result<u32, String> {
+    info!("[unmount_all_connections] 开始卸载所有连接");
+    let _ = app.emit("log-event", serde_json::json!({"level": "info", "message": "正在断开所有连接..."}));
+
+    // 获取当前已挂载的网络驱动器
+    let output = std::process::Command::new("net")
+        .args(["use"])
+        .output()
+        .map_err(|e| format!("获取网络驱动器列表失败: {}", e))?;
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut unmounted_count = 0;
+
+    // 解析输出，找到所有网络驱动器
+    for line in output_str.lines() {
+        // 查找类似 "Z:        \\192.168.1.100\share   Microsoft Windows Network" 的行
+        if line.contains("Microsoft Windows Network") || line.contains("WebDAV") {
+            if let Some(drive) = line.chars().next() {
+                if drive.is_alphabetic() {
+                    let drive_with_colon = format!("{}:", drive);
+                    info!("正在断开驱动器: {}", drive_with_colon);
+
+                    let result = std::process::Command::new("net")
+                        .args(["use", &drive_with_colon, "/delete", "/y"])
+                        .output();
+
+                    if let Ok(out) = result {
+                        if out.status.success() {
+                            unmounted_count += 1;
+                            info!("已断开驱动器: {}", drive_with_colon);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    info!("[unmount_all_connections] 共断开 {} 个驱动器", unmounted_count);
+    let _ = app.emit("log-event", serde_json::json!({"level": "info", "message": format!("已断开 {} 个驱动器", unmounted_count)}));
+    Ok(unmounted_count)
+}
+
+#[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     info!("[open_folder] 收到请求: {}", path);
 
@@ -1739,11 +1835,14 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // Hide window instead of closing (minimize to tray)
-                let _ = window.hide();
-                api.prevent_close();
-                info!("Window hidden to tray");
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    // 点击关闭按钮时，隐藏窗口到托盘（而不是退出）
+                    let _ = window.hide();
+                    api.prevent_close();
+                    info!("Close requested - window hidden to tray");
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1767,7 +1866,11 @@ fn main() {
             sync_existing_connections,
             emit_log,
             get_log_file_path,
-            open_log_file
+            open_log_file,
+            clean_log_files,
+            minimize_to_tray,
+            quit_app,
+            unmount_all_connections
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
