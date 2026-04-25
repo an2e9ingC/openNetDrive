@@ -50,6 +50,7 @@ function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deleteOption, setDeleteOption] = useState<'disconnect' | 'keep' | null>(null);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [quitDisconnect, setQuitDisconnect] = useState(false);
   const [showCleanLogConfirm, setShowCleanLogConfirm] = useState(false);
@@ -227,9 +228,15 @@ function App() {
 
   const handleOpenFolder = async (mountPoint: string) => {
     try {
-      const path = mountPoint + '\\';
+      // 处理路径：确保格式正确
+      let path = mountPoint;
+      // 如果盘符没有反斜杠，添加它
+      if (path.length === 2 && path.endsWith(':')) {
+        path = path + '\\';
+      }
       console.log('[OpenFolder] Opening:', path);
-      await invoke('open_folder', { path });
+      // 使用 PowerShell 打开资源管理器
+      await invoke('open_folder_powershell', { path });
     } catch (error) {
       console.error('Failed to open folder:', error);
       setToast({ message: '打开文件夹失败: ' + error, type: 'error' });
@@ -256,30 +263,32 @@ function App() {
 
   // 执行删除确认后的操作
   const confirmDelete = async () => {
-    if (!pendingDeleteId) return;
+    if (!pendingDeleteId || !deleteOption) return;
 
     const id = pendingDeleteId;
     const conn = connections.find(c => c.id === id);
     if (!conn) {
       setShowDeleteConfirm(false);
       setPendingDeleteId(null);
+      setDeleteOption(null);
       return;
     }
 
-    // 用户确认后，如果连接已挂载，先断开
-    if (conn.enabled) {
-      console.log('[Delete] Connection is enabled, unmounting first...');
+    // 如果选择"断开连接"，先断开再删除
+    if (deleteOption === 'disconnect' && conn.enabled) {
+      console.log('[Delete] Disconnecting first...');
       try {
         setMountingId(id);
         await invoke('unmount_connection', { id });
         setMountingId(null);
-        console.log('[Delete] Unmount successful');
+        console.log('[Delete] Disconnect successful');
       } catch (e) {
-        console.error('[Delete] Failed to unmount:', e);
+        console.error('[Delete] Failed to disconnect:', e);
         setMountingId(null);
-        setToast({ message: 'Failed to unmount: ' + e, type: 'error' });
+        setToast({ message: '断开连接失败: ' + e, type: 'error' });
         setShowDeleteConfirm(false);
         setPendingDeleteId(null);
+        setDeleteOption(null);
         return;
       }
     }
@@ -288,15 +297,17 @@ function App() {
     try {
       console.log('[Delete] Calling remove_connection backend...');
       await invoke('remove_connection', { id });
-      setToast({ message: 'Connection deleted', type: 'success' });
+      setToast({ message: deleteOption === 'disconnect' ? '已断开并删除连接' : '已删除连接信息', type: 'success' });
       setShowDeleteConfirm(false);
       setPendingDeleteId(null);
+      setDeleteOption(null);
       loadConnections();
     } catch (error) {
       console.error('[Delete] Failed to delete:', error);
-      setToast({ message: 'Delete failed: ' + error, type: 'error' });
+      setToast({ message: '删除失败: ' + error, type: 'error' });
       setShowDeleteConfirm(false);
       setPendingDeleteId(null);
+      setDeleteOption(null);
     }
   };
 
@@ -570,30 +581,75 @@ function App() {
 
       {/* 删除确认对话框 */}
       {showDeleteConfirm && pendingDeleteId && (
-        <div className="modal-overlay" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); }}>
+        <div className="modal-overlay" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); setDeleteOption(null); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>⚠️ Delete Connection</h2>
+            <h2>⚠️ 删除连接</h2>
             {(() => {
               const conn = connections.find(c => c.id === pendingDeleteId);
               return conn ? (
                 <>
-                  <p style={{ marginBottom: '16px' }}>
+                  <p style={{ marginBottom: '12px' }}>
+                    确定要删除连接 "<strong>{conn.name}</strong>" 吗？
+                  </p>
+                  {conn.mount_point && (
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '16px', fontSize: '0.9rem' }}>
+                      盘符: {conn.mount_point}
+                    </p>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '20px' }}>
                     {conn.enabled ? (
-                      <>This connection is currently mounted.<br/>Deleting will disconnect the drive first.</>
-                    ) : (
-                      <>Are you sure you want to delete this connection?</>
-                    )}
-                  </p>
-                  <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
-                    Connection: <strong>{conn.name}</strong><br/>
-                    {conn.mount_point && `Drive: ${conn.mount_point}`}
-                  </p>
-                  <div className="modal-actions">
-                    <button className="btn btn-secondary" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); }}>
-                      Cancel
+                      <button
+                        className="btn btn-danger"
+                        style={{
+                          transition: 'all 0.2s ease',
+                          transform: 'scale(1)',
+                          padding: '10px 16px',
+                          borderRadius: '6px',
+                          fontSize: '0.95rem',
+                          fontWeight: 500,
+                        }}
+                        onMouseOver={(e) => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.4)'; }}
+                        onMouseOut={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; }}
+                        onClick={() => { setDeleteOption('disconnect'); confirmDelete(); }}
+                      >
+                        🔌 断开连接并删除
+                      </button>
+                    ) : null}
+                    <button
+                      style={{
+                        background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                        color: 'white',
+                        border: 'none',
+                        padding: '10px 16px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '0.95rem',
+                        fontWeight: 500,
+                        transition: 'all 0.2s ease',
+                        transform: 'scale(1)',
+                      }}
+                      onMouseOver={(e) => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.4)'; }}
+                      onMouseOut={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; }}
+                      onClick={() => { setDeleteOption('keep'); confirmDelete(); }}
+                    >
+                      🗑️ 仅删除连接信息
                     </button>
-                    <button className="btn btn-danger" onClick={confirmDelete}>
-                      Delete
+                    <button
+                      className="btn btn-secondary"
+                      style={{
+                        background: 'var(--bg-secondary)',
+                        transition: 'all 0.2s ease',
+                        transform: 'scale(1)',
+                        padding: '10px 16px',
+                        borderRadius: '6px',
+                        fontSize: '0.95rem',
+                        fontWeight: 500,
+                      }}
+                      onMouseOver={(e) => { e.currentTarget.style.transform = 'scale(1.02)'; }}
+                      onMouseOut={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                      onClick={() => { setShowDeleteConfirm(false); setPendingDeleteId(null); setDeleteOption(null); }}
+                    >
+                      取消
                     </button>
                   </div>
                 </>

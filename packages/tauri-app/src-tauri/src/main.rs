@@ -13,6 +13,9 @@ use tauri::{
     Emitter, Manager, WindowEvent,
 };
 use tauri::AppHandle;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter, registry, layer::SubscriberExt};
 
 // 全局变量存储 app_handle，用于日志发送到 GUI
@@ -1374,6 +1377,95 @@ fn unmount_all_connections(app: tauri::AppHandle) -> Result<u32, String> {
     Ok(unmounted_count)
 }
 
+// 使用 Windows API 打开资源管理器（无控制台窗口）
+#[tauri::command]
+fn open_folder_powershell(path: String) -> Result<(), String> {
+    info!("[open_folder_powershell] 收到请求: {}", path);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use std::ffi::OsStr;
+
+        // 规范化路径格式
+        let normalized_path = if path.len() == 2 && path.ends_with(':') {
+            format!("{}:", path)
+        } else {
+            path.clone()
+        };
+
+        info!("[open_folder_powershell] 规范化路径: {}", normalized_path);
+
+        // 使用 Windows API ShellExecuteW 打开资源管理器
+        // 这完全不会显示任何控制台窗口
+        unsafe {
+            use std::ffi::OsStr;
+
+            // 将路径转换为宽字符
+            let path_wide: Vec<u16> = OsStr::new(&normalized_path)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+
+            // ShellExecuteW 参数说明:
+            // hwnd: NULL (无父窗口)
+            // lpOperation: "open" 打开操作
+            // lpFile: 要打开的文件/文件夹
+            // lpParameters: NULL (无参数)
+            // lpDirectory: NULL (使用当前目录)
+            // nShowCmd: SW_SHOWNORMAL (1) 正常显示窗口
+            let result = windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                OsStr::new("open").encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>().as_ptr(),
+                path_wide.as_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                1, // SW_SHOWNORMAL
+            );
+
+            if result as isize > 32 {
+                info!("[open_folder_powershell] ShellExecuteW 成功: result={:?}", result);
+                Ok(())
+            } else {
+                error!("[open_folder_powershell] ShellExecuteW 失败: result={:?}", result);
+                // 如果 API 失败，尝试回退到 explorer 命令
+                let result2 = std::process::Command::new("explorer")
+                    .arg(&normalized_path)
+                    .spawn();
+
+                match result2 {
+                    Ok(child) => {
+                        info!("[open_folder_powershell] explorer 回退成功: pid={:?}", child.id());
+                        Ok(())
+                    }
+                    Err(e) => {
+                        error!("[open_folder_powershell] explorer 回退也失败: {}", e);
+                        Err("打开资源管理器失败，请手动打开".to_string())
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+
+        #[cfg(target_os = "linux")]
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        Err("Unsupported platform".to_string())
+    }
+}
+
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
     info!("[open_folder] 收到请求: {}", path);
@@ -1861,6 +1953,7 @@ fn main() {
             save_settings,
             get_available_drives,
             open_folder,
+            open_folder_powershell,
             get_connection_host_info,
             get_mounted_drives,
             sync_existing_connections,
