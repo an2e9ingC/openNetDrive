@@ -328,7 +328,7 @@ function App() {
     <div className="container">
       {/* 自定义标题栏 */}
       <div className="title-bar" data-tauri-drag-region>
-        <div className="title-bar-title" data-tauri-drag-region>openNetDrive</div>
+        <div className="title-bar-title" data-tauri-drag-region>openNetDrive v{appVersion}</div>
         <div className="title-bar-buttons">
           <button
             className="title-bar-btn minimize"

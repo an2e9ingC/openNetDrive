@@ -14,8 +14,6 @@ use tauri::{
 };
 use tauri::AppHandle;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter, registry, layer::SubscriberExt};
 
 // 全局变量存储 app_handle，用于日志发送到 GUI
@@ -1385,7 +1383,6 @@ fn open_folder_powershell(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::ffi::OsStrExt;
-        use std::ffi::OsStr;
 
         // 规范化路径格式
         let normalized_path = if path.len() == 2 && path.ends_with(':') {
